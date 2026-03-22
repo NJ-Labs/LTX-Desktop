@@ -6,6 +6,7 @@ import os
 import signal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from api_types import GpuInfoResponse, HealthResponse
 from state import get_state_service
@@ -22,6 +23,12 @@ def route_health(handler: AppHandler = Depends(get_state_service)) -> HealthResp
 @router.get("/api/gpu-info", response_model=GpuInfoResponse)
 def route_gpu_info(handler: AppHandler = Depends(get_state_service)) -> GpuInfoResponse:
     return handler.health.get_gpu_info()
+
+
+@router.get("/readyz")
+def route_ready(handler: AppHandler = Depends(get_state_service)) -> JSONResponse:
+    ready, payload = handler.health.get_startup_probe()
+    return JSONResponse(status_code=200 if ready else 503, content=payload)
 
 
 def _shutdown_process() -> None:

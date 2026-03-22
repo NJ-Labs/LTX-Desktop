@@ -1,6 +1,6 @@
-# LTX Desktop
+# LTX Studio
 
-LTX Desktop is an open-source desktop app for generating videos with LTX models — locally on supported Windows/Linux NVIDIA GPUs, with an API mode for unsupported hardware and macOS.
+LTX Studio is an open-source desktop app for generating videos with LTX models — locally on supported Windows/Linux NVIDIA GPUs, with an API mode for unsupported hardware and macOS.
 
 > **Status: Beta.** Expect breaking changes.
 > Frontend architecture is under active refactor; large UI PRs may be declined for now (see [`CONTRIBUTING.md`](docs/CONTRIBUTING.md)).
@@ -64,12 +64,12 @@ In API-only mode, available resolutions/durations may be limited to what the API
 ## Install
 
 1. Download the latest installer from GitHub Releases: [Releases](../../releases)
-2. Install and launch **LTX Desktop**
+2. Install and launch **LTX Studio**
 3. Complete first-run setup
 
 ## First run & data locations
 
-LTX Desktop stores app data (settings, models, logs) in:
+LTX Studio stores app data (settings, models, logs) in:
 
 - **Windows:** `%LOCALAPPDATA%\LTXDesktop\`
 - **macOS:** `~/Library/Application Support/LTXDesktop/`
@@ -112,7 +112,7 @@ Used for AI prompt suggestions. When enabled, prompt context and frames may be s
 
 ## Architecture
 
-LTX Desktop is split into three main layers:
+LTX Studio is split into three main layers:
 
 - **Renderer (`frontend/`)**: TypeScript + React UI.
   - Calls the local backend over HTTP at `http://localhost:8000`.
@@ -181,11 +181,12 @@ Building installers:
 
 ## Telemetry
 
-LTX Desktop collects minimal, anonymous usage analytics (app version, platform, and a random installation ID) to help prioritize development. No personal information or generated content is collected. Analytics is enabled by default and can be disabled in **Settings > General > Anonymous Analytics**. See [`TELEMETRY.md`](docs/TELEMETRY.md) for details.
+LTX Studio collects minimal, anonymous usage analytics (app version, platform, and a random installation ID) to help prioritize development. No personal information or generated content is collected. Analytics is enabled by default and can be disabled in **Settings > General > Anonymous Analytics**. See [`TELEMETRY.md`](docs/TELEMETRY.md) for details.
 
 ## Docs
 
 - [`INSTALLER.md`](docs/INSTALLER.md) — building installers
+- [`AIRGAP_SELF_HOSTING.md`](docs/AIRGAP_SELF_HOSTING.md) — offline backend container image and mounted model layout
 - [`TELEMETRY.md`](docs/TELEMETRY.md) — telemetry and privacy
 - [`backend/architecture.md`](backend/architecture.md) — backend architecture
 

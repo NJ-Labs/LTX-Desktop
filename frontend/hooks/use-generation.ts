@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from 'react'
 import type { GenerationSettings } from '../components/SettingsPanel'
 import { backendFetch } from '../lib/backend'
+import { pathToBrowserUrl } from '../lib/web-mode'
 import { useAppSettings } from '../contexts/AppSettingsContext'
 
 interface GenerationState {
@@ -219,15 +220,11 @@ export function useGeneration(): UseGenerationReturn {
       const result = await response.json()
       
       if (result.status === 'complete' && result.video_path) {
-        // Convert Windows path to proper file:// URL
-        const videoPathNormalized = result.video_path.replace(/\\/g, '/')
-        const fileUrl = videoPathNormalized.startsWith('/') ? `file://${videoPathNormalized}` : `file:///${videoPathNormalized}`
-        
         setState({
           isGenerating: false,
           progress: 100,
           statusMessage: 'Complete!',
-          videoUrl: fileUrl,
+          videoUrl: pathToBrowserUrl(result.video_path),
           videoPath: result.video_path,  // Keep original path for API calls
           imageUrl: null,
           imagePath: null,
@@ -407,11 +404,7 @@ export function useGeneration(): UseGenerationReturn {
         }
         
         if (rawPaths.length > 0) {
-          // Convert all paths to file URLs
-          const fileUrls = rawPaths.map((path: string) => {
-            const imagePath = path.replace(/\\/g, '/')
-            return imagePath.startsWith('/') ? `file://${imagePath}` : `file:///${imagePath}`
-          })
+          const fileUrls = rawPaths.map((path: string) => pathToBrowserUrl(path))
           
           setState({
             isGenerating: false,

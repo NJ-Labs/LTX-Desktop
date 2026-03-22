@@ -4,56 +4,88 @@ import electron from 'vite-plugin-electron'
 import renderer from 'vite-plugin-electron-renderer'
 import path from 'path'
 
+const isWebBuild = process.env.BUILD_TARGET === 'web'
+
 export default defineConfig({
   plugins: [
     react(),
-    electron([
-      {
-        entry: 'electron/main.ts',
-        onstart(options) {
-          if (process.env.ELECTRON_DEBUG) {
-            // --inspect and --remote-debugging-port must come before '.' (the app path)
-            options.startup(['--inspect=9229', '--remote-debugging-port=9222', '.', '--no-sandbox'])
-          } else {
-            options.startup()
-          }
-        },
-        vite: {
-          build: {
-            outDir: 'dist-electron',
-            sourcemap: true,
-            rollupOptions: {
-              external: ['electron']
-            }
-          }
-        }
-      },
-      {
-        entry: 'electron/preload.ts',
-        onstart(options) {
-          options.reload()
-        },
-        vite: {
-          build: {
-            outDir: 'dist-electron',
-            sourcemap: true,
-            rollupOptions: {
-              output: {
-                format: 'cjs'  // Preload must be CommonJS
+    ...(!isWebBuild
+      ? [
+          electron([
+            {
+              entry: 'electron/main.ts',
+              onstart(options) {
+                if (process.env.ELECTRON_DEBUG) {
+                  options.startup(['--inspect=9229', '--remote-debugging-port=9222', '.', '--no-sandbox'])
+                } else {
+                  options.startup()
+                }
+              },
+              vite: {
+                build: {
+                  outDir: 'dist-electron',
+                  sourcemap: true,
+                  rollupOptions: {
+                    external: ['electron']
+                  }
+                }
+              }
+            },
+            {
+              entry: 'electron/preload.ts',
+              onstart(options) {
+                options.reload()
+              },
+              vite: {
+                build: {
+                  outDir: 'dist-electron',
+                  sourcemap: true,
+                  rollupOptions: {
+                    output: {
+                      format: 'cjs'
+                    }
+                  }
+                }
               }
             }
-          }
-        }
-      }
-    ]),
-    renderer()
+          ]),
+          renderer(),
+        ]
+      : []),
   ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './frontend')
     }
   },
-  base: './',  // Use relative paths for Electron file:// protocol
+  server: isWebBuild
+    ? {
+        proxy: {
+          '/api': {
+            target: 'http://127.0.0.1:8001',
+            changeOrigin: true,
+          },
+          '/health': {
+            target: 'http://127.0.0.1:8001',
+            changeOrigin: true,
+          },
+          '/readyz': {
+            target: 'http://127.0.0.1:8001',
+            changeOrigin: true,
+          },
+          '/media': {
+            target: 'http://127.0.0.1:8001',
+            changeOrigin: true,
+          },
+          '/ws': {
+            target: 'ws://127.0.0.1:8001',
+            changeOrigin: true,
+            ws: true,
+          },
+        },
+      }
+    : undefined,
+  base: isWebBuild ? '/' : './',
   build: {
     outDir: 'dist'
   }

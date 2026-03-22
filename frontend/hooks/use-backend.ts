@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { backendFetch, backendWsUrl, resetBackendCredentials } from '../lib/backend'
 import { logger } from '../lib/logger'
+import { isWebMode } from '../lib/web-mode'
 
 interface BackendStatus {
   connected: boolean
@@ -145,7 +146,13 @@ export function useBackend(): UseBackendReturn {
       if (healthy) {
         await fetchModels()
       } else {
-        setError('Failed to connect to backend')
+        if (isWebMode()) {
+          setProcessStatus(null)
+          setStatus((prev) => ({ ...prev, connected: false }))
+          setError(null)
+        } else {
+          setError('Failed to connect to backend')
+        }
       }
       setIsLoading(false)
       return

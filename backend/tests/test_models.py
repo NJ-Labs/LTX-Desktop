@@ -48,6 +48,20 @@ class TestModelsStatus:
         assert r.json()["all_downloaded"] is False
         assert all("id" in model for model in r.json()["models"])
 
+    def test_model_status_reports_relative_and_resolved_paths(self, client, test_state):
+        r = client.get("/api/models/status")
+        assert r.status_code == 200
+
+        checkpoint = next(m for m in r.json()["models"] if m["id"] == "checkpoint")
+        expected_path = resolve_model_path(
+            test_state.models.models_dir,
+            test_state.config.model_download_specs,
+            "checkpoint",
+        )
+
+        assert checkpoint["relative_path"] == "ltx-2.3-22b-distilled.safetensors"
+        assert checkpoint["resolved_path"] == str(expected_path)
+
     def test_ic_lora_is_optional_and_reported(self, client):
         r = client.get("/api/models/status")
         assert r.status_code == 200
@@ -76,6 +90,17 @@ class TestModelsStatus:
         r = client.get("/api/models/status")
         te_model = next(m for m in r.json()["models"] if m["name"] == "gemma-3-12b-it-qat-q4_0-unquantized")
         assert te_model["required"] is False
+
+    def test_offline_mode_ignores_api_key_for_text_encoder_requirement(self, client, test_state):
+        test_state.config.offline_mode = True
+        test_state.state.app_settings.ltx_api_key = "stale-key"
+
+        r = client.get("/api/models/status")
+        assert r.status_code == 200
+
+        te_model = next(m for m in r.json()["models"] if m["id"] == "text_encoder")
+        assert te_model["required"] is True
+        assert te_model["optional_reason"] is None
 
     def test_forced_mode_requires_no_local_models(self, client, test_state):
         test_state.config.force_api_generations = True
@@ -146,6 +171,14 @@ class TestRequiredModels:
         r = client.get("/api/models/required-models")
         assert r.status_code == 200
         assert r.json()["modelTypes"] == DEFAULT_REQUIRED_MODEL_TYPES_WITHOUT_TEXT_ENCODER
+
+    def test_offline_mode_keeps_text_encoder_required_even_with_api_key(self, client, test_state):
+        test_state.config.offline_mode = True
+        test_state.state.app_settings.ltx_api_key = "test-key"
+
+        r = client.get("/api/models/required-models")
+        assert r.status_code == 200
+        assert r.json()["modelTypes"] == DEFAULT_REQUIRED_MODEL_TYPES
 
     def test_forced_mode_returns_empty_set(self, client, test_state):
         test_state.config.force_api_generations = True

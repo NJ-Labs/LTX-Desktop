@@ -38,7 +38,7 @@ export function getProjectAssetsPath(): string {
     cachedProjectAssetsPath = path.resolve(state.projectAssetsPath)
     return cachedProjectAssetsPath
   }
-  const defaultPath = path.resolve(path.join(app.getPath('downloads'), 'Ltx Desktop Assets'))
+  const defaultPath = path.resolve(path.join(app.getPath('downloads'), 'LTX Studio Assets'))
   cachedProjectAssetsPath = defaultPath
   return defaultPath
 }

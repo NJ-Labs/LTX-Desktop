@@ -54,7 +54,7 @@ Write-Host "========================================" -ForegroundColor Green
 
 if ($Unpack) {
     $UnpackedDir = Join-Path $ReleaseDir "win-unpacked"
-    $ExePath = Join-Path $UnpackedDir "LTX Desktop.exe"
+    $ExePath = Join-Path $UnpackedDir "LTX Studio.exe"
     Write-Host "`nUnpacked app ready!" -ForegroundColor Cyan
     Write-Host "Run: $ExePath" -ForegroundColor Cyan
     Write-Host "`nTip: Just restart the app after code changes - no rebuild needed!" -ForegroundColor Green

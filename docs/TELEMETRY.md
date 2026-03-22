@@ -1,6 +1,6 @@
 # Telemetry
 
-LTX Desktop collects minimal, anonymous telemetry to help the team understand how the app is used and prioritize development.
+LTX Studio collects minimal, anonymous telemetry to help the team understand how the app is used and prioritize development.
 No personal information, generated content, prompts, file paths, or IP-derived location data is collected or stored.
 
 ## Opting out

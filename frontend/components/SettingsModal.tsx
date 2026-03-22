@@ -21,7 +21,7 @@ interface SettingsModalProps {
 type TabId = 'general' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, forceApiGenerations } = useAppSettings()
+  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, forceApiGenerations, offlineMode } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [ltxApiKeyInput, setLtxApiKeyInput] = useState('')
@@ -47,9 +47,13 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   // Sync active tab with initialTab prop when modal opens
   useEffect(() => {
     if (isOpen && initialTab) {
+      if (offlineMode && (initialTab === 'apiKeys' || initialTab === 'promptEnhancer')) {
+        setActiveTab('general')
+        return
+      }
       setActiveTab(initialTab)
     }
-  }, [isOpen, initialTab])
+  }, [initialTab, isOpen, offlineMode])
 
   useEffect(() => {
     if (!isOpen || activeTab !== 'apiKeys' || !focusLtxApiKeyInputOnTabChange) return
@@ -270,7 +274,12 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     { id: 'inference' as TabId, label: 'Inference', icon: Sliders },
     { id: 'promptEnhancer' as TabId, label: 'Prompt Enhancer', icon: Sparkles },
     { id: 'about' as TabId, label: 'About', icon: Info },
-  ]
+  ].filter((tab) => {
+    if (!offlineMode) {
+      return true
+    }
+    return tab.id !== 'apiKeys' && tab.id !== 'promptEnhancer'
+  })
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -351,7 +360,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 </div>
               </div>
 
-              {!forceApiGenerations && (
+              {!offlineMode && !forceApiGenerations && (
                 <div className="space-y-4">
                   <div className="flex items-center gap-2">
                     <Film className="h-4 w-4 text-blue-400" />
@@ -414,65 +423,64 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                   Text encoding converts your prompt into data the AI understands. Choose how to do this.
                 </p>
 
-                {/* LTX API Option (Default) */}
-                <div
-                  className={`bg-zinc-800/50 rounded-lg p-4 border-2 transition-colors cursor-pointer ${
-                    !settings.useLocalTextEncoder ? 'border-blue-500' : 'border-transparent hover:border-zinc-600'
-                  }`}
-                  onClick={() => {
-                    if (!settings.useLocalTextEncoder) return
-                    if (!settings.hasLtxApiKey) {
-                      openApiKeysAndFocusLtxInput()
-                      return
-                    }
-                    handleToggleLocalEncoder()
-                  }}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <Zap className="h-4 w-4 text-blue-400" />
-                        <span className="text-sm font-medium text-white">LTX API</span>
-                        <span className="text-xs px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">Recommended</span>
+                {!offlineMode && (
+                  <div
+                    className={`bg-zinc-800/50 rounded-lg p-4 border-2 transition-colors cursor-pointer ${
+                      !settings.useLocalTextEncoder ? 'border-blue-500' : 'border-transparent hover:border-zinc-600'
+                    }`}
+                    onClick={() => {
+                      if (!settings.useLocalTextEncoder) return
+                      if (!settings.hasLtxApiKey) {
+                        openApiKeysAndFocusLtxInput()
+                        return
+                      }
+                      handleToggleLocalEncoder()
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <Zap className="h-4 w-4 text-blue-400" />
+                          <span className="text-sm font-medium text-white">LTX API</span>
+                          <span className="text-xs px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">Recommended</span>
+                        </div>
+                        <p className="text-xs text-zinc-400 mt-1">
+                          Fast cloud-based text encoding (~1 second). Requires an LTX API key configured in the API Keys tab.
+                        </p>
                       </div>
-                      <p className="text-xs text-zinc-400 mt-1">
-                        Fast cloud-based text encoding (~1 second). Requires an LTX API key configured in the API Keys tab.
-                      </p>
+                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                        !settings.useLocalTextEncoder ? 'border-blue-500 bg-blue-500' : 'border-zinc-600'
+                      }`}>
+                        {!settings.useLocalTextEncoder && <Check className="h-3 w-3 text-white" />}
+                      </div>
                     </div>
-                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                      !settings.useLocalTextEncoder ? 'border-blue-500 bg-blue-500' : 'border-zinc-600'
-                    }`}>
-                      {!settings.useLocalTextEncoder && <Check className="h-3 w-3 text-white" />}
-                    </div>
+
+                    {!settings.useLocalTextEncoder && !settings.hasLtxApiKey && (
+                      <div className="mt-2 text-xs text-amber-400 flex items-center gap-1.5">
+                        <AlertCircle className="h-3 w-3" />
+                        API key required — configure it in the API Keys tab.
+                      </div>
+                    )}
+
+                    {!settings.useLocalTextEncoder && settings.hasLtxApiKey && (
+                      <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-700/50">
+                        <div>
+                          <label className="text-xs text-white">Prompt Cache</label>
+                          <p className="text-xs text-zinc-500">Skip repeat encoding calls</p>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          max="1000"
+                          value={settings.promptCacheSize ?? 100}
+                          onChange={handlePromptCacheSizeChange}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-16 px-2 py-1 bg-zinc-700 border border-zinc-600 rounded text-xs text-white text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    )}
                   </div>
-
-                  {/* Warning when selected but no key */}
-                  {!settings.useLocalTextEncoder && !settings.hasLtxApiKey && (
-                    <div className="mt-2 text-xs text-amber-400 flex items-center gap-1.5">
-                      <AlertCircle className="h-3 w-3" />
-                      API key required — configure it in the API Keys tab.
-                    </div>
-                  )}
-
-                  {/* Prompt Cache Size — only relevant for API text encoding */}
-                  {!settings.useLocalTextEncoder && settings.hasLtxApiKey && (
-                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-700/50">
-                      <div>
-                        <label className="text-xs text-white">Prompt Cache</label>
-                        <p className="text-xs text-zinc-500">Skip repeat encoding calls</p>
-                      </div>
-                      <input
-                        type="number"
-                        min="0"
-                        max="1000"
-                        value={settings.promptCacheSize ?? 100}
-                        onChange={handlePromptCacheSizeChange}
-                        onClick={(e) => e.stopPropagation()}
-                        className="w-16 px-2 py-1 bg-zinc-700 border border-zinc-600 rounded text-xs text-white text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                  )}
-                </div>
+                )}
 
                 {/* Local Encoder Option */}
                 <div
@@ -491,7 +499,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                         <span className="text-sm font-medium text-white">Local Encoder</span>
                       </div>
                       <p className="text-xs text-zinc-400 mt-1">
-                        Run on your computer (~23 seconds). Requires 25 GB download.
+                        {offlineMode ? 'Required for offline self-hosted generation. Download the local text encoder into the mounted models directory.' : 'Run on your computer (~23 seconds). Requires 25 GB download.'}
                       </p>
                     </div>
                     <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
@@ -723,7 +731,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       </label>
                     </div>
                     <p className="text-xs text-zinc-500 leading-relaxed">
-                      Share anonymous usage data to help improve LTX Desktop.
+                      Share anonymous usage data to help improve LTX Studio.
                       Only basic technical information is collected — never personal data or generated content.
                     </p>
                   </div>
@@ -747,7 +755,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
             </>
           )}
 
-          {activeTab === 'apiKeys' && (
+          {activeTab === 'apiKeys' && !offlineMode && (
             <>
               {/* LTX API Key Section */}
               <div className="space-y-4">
@@ -1048,7 +1056,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
             </>
           )}
 
-          {activeTab === 'promptEnhancer' && (
+          {activeTab === 'promptEnhancer' && !offlineMode && (
             <>
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
@@ -1175,7 +1183,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 <div className="space-y-6">
                   {/* App Identity */}
                   <div className="text-center space-y-2">
-                    <h3 className="text-lg font-bold text-white">LTX Desktop</h3>
+                    <h3 className="text-lg font-bold text-white">LTX Studio</h3>
                     <p className="text-sm text-zinc-400">Version {appVersion || '...'}</p>
                     <p className="text-xs text-zinc-500">AI-Powered Video Editor</p>
                   </div>

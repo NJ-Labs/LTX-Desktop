@@ -3,6 +3,7 @@ import { X, Download, FolderOpen, Film, Package, Loader2, Check, AlertCircle, Ch
 import { Button } from './ui/button'
 import type { Track, Timeline, TimelineClip } from '../types/project'
 import { DEFAULT_SUBTITLE_STYLE } from '../types/project'
+import { isWebMode } from '../lib/web-mode'
 
 interface ExportModalProps {
   open: boolean
@@ -140,6 +141,7 @@ function escapeXml(str: string): string {
 }
 
 export function ExportModal({ open, onClose, clips, tracks, timeline, projectName }: ExportModalProps) {
+  const webMode = isWebMode()
   const [exportStatus, setExportStatus] = useState<ExportStatus>('idle')
   const [exportType, setExportType] = useState<'package' | 'video' | null>(null)
   const [exportProgress, setExportProgress] = useState(0)
@@ -200,6 +202,23 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
     setExportError(null)
 
     try {
+      if (webMode) {
+        const xml = generateFCPXML(clips, tracks, projectName, timeline.name)
+        const blob = new Blob([xml], { type: 'application/xml' })
+        const url = URL.createObjectURL(blob)
+        const fileName = `${projectName}_${timeline.name}.fcpxml`
+        const link = document.createElement('a')
+        link.href = url
+        link.download = fileName
+        link.click()
+        URL.revokeObjectURL(url)
+
+        setExportProgress(100)
+        setExportPath(fileName)
+        setExportStatus('done')
+        return
+      }
+
       const filePath = await window.electronAPI?.showSaveDialog({
         title: 'Export FCPXML Package',
         defaultPath: `${projectName}_${timeline.name}.fcpxml`,
@@ -228,10 +247,16 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
       setExportError(String(err))
       setExportStatus('error')
     }
-  }, [clips, tracks, timeline, projectName])
+  }, [clips, tracks, timeline, projectName, webMode])
 
   const handleExportVideo = useCallback(async () => {
     if (!timeline || clips.length === 0) return
+    if (webMode) {
+      setExportType('video')
+      setExportStatus('error')
+      setExportError('Native video export is only available in the desktop app.')
+      return
+    }
     setExportType('video')
     setExportStatus('exporting')
     setExportProgress(0)
@@ -309,7 +334,7 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
       setExportError(String(err))
       setExportStatus('error')
     }
-  }, [clips, tracks, timeline, projectName, settings, burnSubtitles, exportLetterbox])
+  }, [clips, tracks, timeline, projectName, settings, burnSubtitles, exportLetterbox, webMode])
 
   const handleCancel = useCallback(async () => {
     abortRef.current = true
@@ -383,19 +408,21 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="border-zinc-700 text-zinc-300"
-                  onClick={() => {
-                    if (exportPath) {
-                      window.electronAPI?.openParentFolderOfFile(exportPath)
-                    }
-                  }}
-                >
-                  <FolderOpen className="h-4 w-4 mr-2" />
-                  Show in Folder
-                </Button>
+                {!webMode && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-zinc-700 text-zinc-300"
+                    onClick={() => {
+                      if (exportPath) {
+                        window.electronAPI?.openParentFolderOfFile(exportPath)
+                      }
+                    }}
+                  >
+                    <FolderOpen className="h-4 w-4 mr-2" />
+                    Show in Folder
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -450,7 +477,7 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
                 </div>
                 <div className="flex-1 text-left">
                   <p className="text-sm font-semibold text-white">Package (FCPXML)</p>
-                  <p className="text-[10px] text-zinc-500">For Premiere Pro &amp; DaVinci Resolve</p>
+                  <p className="text-[10px] text-zinc-500">{webMode ? 'Downloads to your browser for Premiere Pro & DaVinci Resolve' : 'For Premiere Pro & DaVinci Resolve'}</p>
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   <div className="w-6 h-6 rounded bg-zinc-700 flex items-center justify-center" title="DaVinci Resolve">
@@ -462,6 +489,15 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
                   <Download className="h-4 w-4 text-zinc-500 group-hover:text-zinc-300 transition-colors ml-1" />
                 </div>
               </button>
+
+              {webMode && (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+                  <p className="text-xs font-medium text-amber-200">Browser mode limitation</p>
+                  <p className="mt-1 text-[11px] text-amber-100/80">
+                    Native video export uses desktop ffmpeg integration and is not available from the shared container UI. Package export remains available.
+                  </p>
+                </div>
+              )}
 
               {/* Divider */}
               <div className="flex items-center gap-3">
@@ -609,7 +645,7 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
               {/* Export button */}
               <button
                 onClick={handleExportVideo}
-                disabled={clips.length === 0}
+                disabled={clips.length === 0 || webMode}
                 className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
               >
                 <Film className="h-4 w-4" />
@@ -618,6 +654,9 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
 
               {clips.length === 0 && (
                 <p className="text-xs text-zinc-500 text-center">Add clips to the timeline to export.</p>
+              )}
+              {webMode && clips.length > 0 && (
+                <p className="text-xs text-zinc-500 text-center">Open the desktop app if you need rendered video export.</p>
               )}
             </div>
           )}

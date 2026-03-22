@@ -1,4 +1,4 @@
-# Contributing to LTX Desktop
+# Contributing to LTX Studio
 
 Thanks for taking the time to contribute!
 

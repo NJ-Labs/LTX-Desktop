@@ -1,7 +1,16 @@
 let cached: { url: string; token: string } | null = null
 
 export async function getBackendCredentials(): Promise<{ url: string; token: string }> {
-  if (!cached) cached = await window.electronAPI.getBackend()
+  if (!cached) {
+    if (window.electronAPI?.getBackend) {
+      cached = await window.electronAPI.getBackend()
+    } else {
+      cached = {
+        url: window.location.origin,
+        token: '',
+      }
+    }
+  }
   return cached
 }
 
@@ -18,7 +27,7 @@ export async function backendFetch(path: string, init?: RequestInit): Promise<Re
 
 export async function backendWsUrl(path: string): Promise<string> {
   const { url, token } = await getBackendCredentials()
-  const ws = url.replace('http://', 'ws://')
+  const ws = url.replace('http://', 'ws://').replace('https://', 'wss://')
   const sep = path.includes('?') ? '&' : '?'
   return `${ws}${path}${sep}token=${token}`
 }

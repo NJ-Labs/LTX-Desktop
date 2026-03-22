@@ -12,4 +12,7 @@ class RuntimePolicyHandler:
 
     def get_runtime_policy(self) -> RuntimePolicyResponse:
         # Server-side single source of truth for forced API mode.
-        return RuntimePolicyResponse(force_api_generations=self._config.force_api_generations)
+        return RuntimePolicyResponse(
+            force_api_generations=self._config.force_api_generations,
+            offline_mode=self._config.offline_mode,
+        )

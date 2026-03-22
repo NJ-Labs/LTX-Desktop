@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { backendFetch, resetBackendCredentials } from '../lib/backend'
+import { isWebMode } from '../lib/web-mode'
 
 export interface InferenceSettings {
   steps: number
@@ -58,6 +59,7 @@ interface AppSettingsContextValue {
   saveFalApiKey: (value: string) => Promise<void>
   saveGeminiApiKey: (value: string) => Promise<void>
   forceApiGenerations: boolean
+  offlineMode: boolean
   shouldVideoGenerateWithLtxApi: boolean
 }
 
@@ -100,6 +102,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [isLoaded, setIsLoaded] = useState(false)
   const [runtimePolicyLoaded, setRuntimePolicyLoaded] = useState(false)
   const [forceApiGenerations, setForceApiGenerations] = useState(true)
+  const [offlineMode, setOfflineMode] = useState(false)
   const [backendProcessStatus, setBackendProcessStatus] = useState<BackendProcessStatus | null>(null)
 
   useEffect(() => {
@@ -115,18 +118,23 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           throw new Error(`Runtime policy fetch failed with status ${response.status}`)
         }
 
-        const payload = (await response.json()) as { force_api_generations?: unknown }
+        const payload = (await response.json()) as { force_api_generations?: unknown; offline_mode?: unknown }
         if (typeof payload.force_api_generations !== 'boolean') {
           throw new Error('Runtime policy response missing force_api_generations boolean')
+        }
+        if (typeof payload.offline_mode !== 'boolean') {
+          throw new Error('Runtime policy response missing offline_mode boolean')
         }
 
         if (!cancelled) {
           setForceApiGenerations(payload.force_api_generations)
+          setOfflineMode(payload.offline_mode)
         }
       } catch {
         if (!cancelled) {
           // Fail closed until policy can be read.
           setForceApiGenerations(true)
+          setOfflineMode(false)
         }
       } finally {
         if (!cancelled) {
@@ -196,6 +204,11 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
         if (cancelled) return
       } catch {
         if (!cancelled) {
+          if (isWebMode()) {
+            setSettings(DEFAULT_APP_SETTINGS)
+            setIsLoaded(true)
+            return
+          }
           retryTimer = setTimeout(fetchSettings, 1000)
         }
       }
@@ -274,7 +287,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   }, [refreshSettings])
 
   const shouldVideoGenerateWithLtxApi =
-    forceApiGenerations || (settings.userPrefersLtxApiVideoGenerations && settings.hasLtxApiKey)
+    !offlineMode && (forceApiGenerations || (settings.userPrefersLtxApiVideoGenerations && settings.hasLtxApiKey))
 
   const contextValue = useMemo<AppSettingsContextValue>(
     () => ({
@@ -287,9 +300,10 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       saveFalApiKey,
       saveGeminiApiKey,
       forceApiGenerations,
+      offlineMode,
       shouldVideoGenerateWithLtxApi,
     }),
-    [forceApiGenerations, isLoaded, refreshSettings, runtimePolicyLoaded, saveFalApiKey, saveGeminiApiKey, saveLtxApiKey, settings, shouldVideoGenerateWithLtxApi, updateSettings],
+    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiKey, saveGeminiApiKey, saveLtxApiKey, settings, shouldVideoGenerateWithLtxApi, updateSettings],
   )
 
   return <AppSettingsContext.Provider value={contextValue}>{children}</AppSettingsContext.Provider>

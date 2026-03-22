@@ -1,6 +1,7 @@
 import React from 'react'
 import { Plus, X, RefreshCw, ChevronLeft, ChevronRight, Layers, GitMerge, FolderPlus, Folder, Trash2, FolderOpen } from 'lucide-react'
 import type { Asset } from '../../types/project'
+import { isWebMode } from '../../lib/web-mode'
 import { COLOR_LABELS } from './video-editor-utils'
 
 export interface AssetContextMenuProps {
@@ -80,7 +81,7 @@ export function AssetContextMenu({
         </button>
       )}
 
-      {!isMulti && asset.path && (
+      {!isMulti && asset.path && !isWebMode() && (
         <button
           onClick={() => {
             window.electronAPI?.showItemInFolder(asset.path!)

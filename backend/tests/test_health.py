@@ -43,6 +43,26 @@ class TestHealth:
         r = client.get("/health", headers={"Origin": "http://localhost:5173"})
         assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
+    def test_readyz_returns_loading_state(self, client, test_state):
+        test_state.health.set_startup_loading("Loading Fast pipeline", 30)
+
+        r = client.get("/readyz")
+
+        assert r.status_code == 503
+        assert r.json() == {
+            "status": "loading",
+            "current_step": "Loading Fast pipeline",
+            "progress": 30,
+        }
+
+    def test_readyz_returns_ok_when_ready(self, client, test_state):
+        test_state.health.set_startup_ready()
+
+        r = client.get("/readyz")
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "ready"}
+
 
 class TestGpuInfo:
     def test_no_gpu(self, client, test_state):

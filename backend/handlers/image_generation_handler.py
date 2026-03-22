@@ -55,7 +55,7 @@ class ImageGenerationHandler(StateHandlerBase):
         else:
             seed = int(time.time()) % 2147483647
 
-        if self.config.force_api_generations:
+        if self.config.force_api_generations and not self.config.offline_mode:
             return self._generate_via_api(
                 prompt=req.prompt,
                 width=width,

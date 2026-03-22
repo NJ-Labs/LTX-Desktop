@@ -62,6 +62,9 @@ class TextHandler(StateHandlerBase):
         text_encoder_dir = resolve_model_path(self.models_dir, self.config.model_download_specs,"text_encoder")
         local_available = text_encoder_dir.exists() and any(text_encoder_dir.iterdir())
 
+        if self.config.offline_mode:
+            return local_available
+
         if api_available and local_available:
             return settings.use_local_text_encoder  # setting is tiebreaker
         return local_available  # use whichever is available
@@ -74,11 +77,16 @@ class TextHandler(StateHandlerBase):
         with no local fallback.
         """
         settings = self.state.app_settings.model_copy(deep=True)
-        api_available = bool(settings.ltx_api_key)
+        api_available = bool(settings.ltx_api_key) and not self.config.offline_mode
         text_encoder_dir = resolve_model_path(self.models_dir, self.config.model_download_specs,"text_encoder")
         local_available = text_encoder_dir.exists() and any(text_encoder_dir.iterdir())
 
         if not api_available and not local_available:
+            if self.config.offline_mode:
+                raise RuntimeError(
+                    "TEXT_ENCODING_NOT_CONFIGURED: Local text encoding is required in offline mode. "
+                    "Download the text encoder in Settings and try again."
+                )
             raise RuntimeError(
                 "TEXT_ENCODING_NOT_CONFIGURED: To generate videos, you need to configure text encoding. "
                 "Either enter an LTX API Key in Settings, or enable the Local Text Encoder."
@@ -101,6 +109,10 @@ class TextHandler(StateHandlerBase):
         return str(text_encoder_dir)
 
     def _prepare_api_embeddings(self, prompt: str, enhance_prompt: bool) -> TextEncodingResult | None:
+        if self.config.offline_mode:
+            self.clear_api_embeddings()
+            return None
+
         if self.should_use_local_encoding():
             self.clear_api_embeddings()
             return None

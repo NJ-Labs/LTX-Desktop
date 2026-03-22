@@ -1,5 +1,5 @@
 # local-build.ps1
-# All-in-one local build script for creating the LTX Desktop installer.
+# All-in-one local build script for creating the LTX Studio installer.
 # Prepares the Python environment, installs pnpm deps, builds the frontend,
 # then packages with electron-builder via create-installer.ps1.
 

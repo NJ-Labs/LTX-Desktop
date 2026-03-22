@@ -89,15 +89,47 @@ class HealthHandler(StateHandlerBase):
     def set_startup_error(self, error: str) -> None:
         self.state.startup = StartupError(error=error)
 
+    def get_startup_probe(self) -> tuple[bool, dict[str, object]]:
+        with self._lock:
+            startup = self.state.startup
+
+        match startup:
+            case StartupReady():
+                return True, {"status": "ready"}
+            case StartupLoading(current_step=step, progress=progress):
+                return False, {
+                    "status": "loading",
+                    "current_step": step,
+                    "progress": progress,
+                }
+            case StartupPending(message=message):
+                return False, {"status": "pending", "message": message}
+            case StartupError(error=error):
+                return False, {"status": "error", "error": error}
+
+        return False, {"status": "unknown"}
+
     def default_warmup(self) -> None:
         try:
+            if self.config.require_local_mode and self.config.force_api_generations:
+                raise RuntimeError(
+                    "Local model serving is required, but this runtime was downgraded to API mode on the current hardware."
+                )
+
             self.set_startup_loading("Checking models", 5)
             status = self._models.get_models_status()
             if not status.all_downloaded:
+                missing_required = [model.id for model in status.models if model.required and not model.downloaded]
+                if self.config.require_local_mode:
+                    raise RuntimeError(
+                        "Required models are missing from the mounted models directory: "
+                        + ", ".join(missing_required)
+                    )
                 self.set_startup_pending("Models not downloaded. User needs to download via app.")
                 return
 
-            if not self.state.app_settings.load_on_startup:
+            should_preload = self.config.startup_preload_models or self.state.app_settings.load_on_startup
+            if not should_preload:
                 self.set_startup_ready()
                 return
 

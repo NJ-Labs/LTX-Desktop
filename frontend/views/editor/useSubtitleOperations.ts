@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import type { SubtitleClip, Track, TimelineClip } from '../../types/project'
 import { parseSrt, exportSrt } from '../../lib/srt'
+import { isWebMode } from '../../lib/web-mode'
 
 export interface UseSubtitleOperationsParams {
   subtitles: SubtitleClip[]
@@ -108,7 +109,7 @@ export function useSubtitleOperations({
 
     const srtContent = exportSrt(cues)
 
-    if (window.electronAPI?.showSaveDialog) {
+    if (!isWebMode() && window.electronAPI?.showSaveDialog) {
       window.electronAPI.showSaveDialog({
         title: 'Export Subtitles',
         defaultPath: `subtitles_${activeTimelineName || 'timeline'}.srt`,

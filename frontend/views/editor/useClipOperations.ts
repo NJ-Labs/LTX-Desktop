@@ -3,6 +3,7 @@ import type { Asset, TimelineClip, Track, TransitionType, SubtitleClip, ClipEffe
 import { DEFAULT_COLOR_CORRECTION, DEFAULT_LETTERBOX, EFFECT_DEFINITIONS, DEFAULT_TEXT_STYLE } from '../../types/project'
 import type { ParsedTimeline } from '../../lib/timeline-import'
 import { exportFcp7Xml } from '../../lib/timeline-import'
+import { isWebMode } from '../../lib/web-mode'
 import { resolveOverlaps, DEFAULT_DISSOLVE_DURATION } from './video-editor-utils'
 
 interface UseClipOperationsParams {
@@ -684,7 +685,7 @@ export function useClipOperations(params: UseClipOperationsParams) {
       clips: exportClips,
     })
     
-    if (window.electronAPI?.showSaveDialog) {
+    if (!isWebMode() && window.electronAPI?.showSaveDialog) {
       const filePath = await window.electronAPI.showSaveDialog({
         title: 'Export Timeline as FCP 7 XML',
         defaultPath: `${activeTimeline.name}.xml`,

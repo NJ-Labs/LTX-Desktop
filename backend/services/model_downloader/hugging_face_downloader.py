@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Callable, Iterator
+import os
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -11,6 +12,20 @@ from unittest.mock import patch
 
 from huggingface_hub import file_download, hf_hub_download, snapshot_download  # type: ignore[reportUnknownVariableType]
 from tqdm.auto import tqdm as tqdm_auto  # type: ignore[reportUnknownVariableType]
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _ensure_downloads_allowed() -> None:
+    if _env_flag("LTX_OFFLINE") or _env_flag("HF_HUB_OFFLINE") or _env_flag("TRANSFORMERS_OFFLINE"):
+        raise RuntimeError(
+            "Model downloads are disabled in offline mode. Mount a populated models directory instead."
+        )
 
 
 def _make_progress_tqdm_class(callback: Callable[[int], None]) -> type:
@@ -87,6 +102,7 @@ class HuggingFaceDownloader:
         local_dir: str,
         on_progress: Callable[[int], None] | None = None,
     ) -> Path:
+        _ensure_downloads_allowed()
         ctx = _patch_download_progress(on_progress) if on_progress is not None else contextlib.nullcontext()
         with ctx:
             path: str = hf_hub_download(repo_id=repo_id, filename=filename, local_dir=local_dir)
@@ -98,6 +114,7 @@ class HuggingFaceDownloader:
         local_dir: str,
         on_progress: Callable[[int], None] | None = None,
     ) -> Path:
+        _ensure_downloads_allowed()
         ctx = _patch_download_progress(on_progress) if on_progress is not None else contextlib.nullcontext()
         with ctx:
             path: str = snapshot_download(repo_id=repo_id, local_dir=local_dir)

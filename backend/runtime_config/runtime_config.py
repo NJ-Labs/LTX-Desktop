@@ -25,6 +25,10 @@ class RuntimeConfig:
     use_sage_attention: bool
     camera_motion_prompts: dict[str, str]
     default_negative_prompt: str
+    forced_models_dir: Path | None = None
+    startup_preload_models: bool = False
+    require_local_mode: bool = False
+    offline_mode: bool = False
 
     def spec_for(self, model_type: ModelFileType) -> ModelFileDownloadSpec:
         return self.model_download_specs[model_type]

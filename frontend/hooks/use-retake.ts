@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { backendFetch } from '../lib/backend'
 import { logger } from '../lib/logger'
+import { pathToBrowserUrl } from '../lib/web-mode'
 
 export type RetakeMode = 'replace_audio_and_video' | 'replace_video' | 'replace_audio'
 
@@ -58,16 +59,13 @@ export function useRetake() {
       const data = await response.json()
 
       if (response.ok && data.status === 'complete' && data.video_path) {
-        const pathNormalized = data.video_path.replace(/\\/g, '/')
-        const videoUrl = pathNormalized.startsWith('/') ? `file://${pathNormalized}` : `file:///${pathNormalized}`
-
         setState({
           isRetaking: false,
           retakeStatus: 'Retake complete!',
           retakeError: null,
           result: {
             videoPath: data.video_path,
-            videoUrl,
+            videoUrl: pathToBrowserUrl(data.video_path),
           },
         })
         return

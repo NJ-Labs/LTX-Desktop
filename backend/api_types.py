@@ -98,6 +98,7 @@ class GpuInfoResponse(BaseModel):
 
 class RuntimePolicyResponse(BaseModel):
     force_api_generations: bool
+    offline_mode: bool = False
 
 
 class GenerationProgressResponse(BaseModel):
@@ -123,6 +124,8 @@ class ModelFileStatus(BaseModel):
     expected_size: int
     required: bool = True
     is_folder: bool = False
+    relative_path: str
+    resolved_path: str
     optional_reason: str | None = None
 
 

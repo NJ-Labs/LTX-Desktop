@@ -76,6 +76,7 @@ class VideoGenerationHandler(StateHandlerBase):
         if should_video_generate_with_ltx_api(
             force_api_generations=self.config.force_api_generations,
             settings=self.state.app_settings,
+            allow_remote_services=not self.config.offline_mode,
         ):
             return self._generate_forced_api(req)
 

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import type { Asset, TimelineClip, Track, TextOverlayStyle } from '../../types/project'
 import { TEXT_PRESETS } from '../../types/project'
+import { isWebMode } from '../../lib/web-mode'
 import { COLOR_LABELS } from './video-editor-utils'
 
 export interface ClipContextMenuProps {
@@ -586,6 +587,7 @@ function SingleClipMenu({
               filePath = liveAsset.takes[Math.max(0, Math.min(takeIdx, liveAsset.takes.length - 1))].path
             }
             if (!filePath) return null
+            if (isWebMode()) return null
             const label = window.electronAPI?.platform === 'darwin' ? 'Reveal in Finder'
               : window.electronAPI?.platform === 'linux' ? 'Show in Files'
               : 'Show in Explorer'

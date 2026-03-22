@@ -107,12 +107,12 @@ if [ "$UNPACK" = true ]; then
     mac)
       echo ""
       echo "Unpacked app ready!"
-      echo "Run: open \"$RELEASE_DIR/mac-arm64/LTX Desktop.app\""
+      echo "Run: open \"$RELEASE_DIR/mac-arm64/LTX Studio.app\""
       ;;
     win)
       echo ""
       echo "Unpacked app ready!"
-      echo "Run: $RELEASE_DIR/win-unpacked/LTX Desktop.exe"
+      echo "Run: $RELEASE_DIR/win-unpacked/LTX Studio.exe"
       ;;
     linux)
       echo ""

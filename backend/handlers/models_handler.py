@@ -77,9 +77,10 @@ class ModelsHandler(StateHandlerBase):
     @with_state_lock
     def get_required_model_types(self, skip_text_encoder: bool = False) -> list[ModelFileType]:
         settings = self.state.app_settings
+        has_remote_text_encoding = bool(settings.ltx_api_key) and not self.config.offline_mode
         required = resolve_required_model_types(
             self._config.required_model_types,
-            has_api_key=bool(settings.ltx_api_key),
+            has_api_key=has_remote_text_encoding,
             use_local_text_encoder=settings.use_local_text_encoder,
         )
         return [
@@ -94,13 +95,14 @@ class ModelsHandler(StateHandlerBase):
 
         if has_api_key is None:
             has_api_key = bool(settings.ltx_api_key)
+        has_remote_text_encoding = has_api_key and not self.config.offline_mode
 
         models: list[ModelFileStatus] = []
         total_size = 0
         downloaded_size = 0
         required_types = resolve_required_model_types(
             self.config.required_model_types,
-            has_api_key,
+            has_remote_text_encoding,
             settings.use_local_text_encoder,
         )
 
@@ -108,6 +110,7 @@ class ModelsHandler(StateHandlerBase):
             spec = self.config.spec_for(model_type)
             path = files[model_type]
             exists = path is not None
+            resolved_path = resolve_model_path(self.models_dir, self.config.model_download_specs, model_type)
             actual_size = self._path_size(path, is_folder=spec.is_folder) if exists else 0
             required = model_type in required_types
             if required:
@@ -118,8 +121,8 @@ class ModelsHandler(StateHandlerBase):
             description = spec.description
             optional_reason: str | None = None
             if model_type == "text_encoder":
-                description += " (optional with API key)" if has_api_key else ""
-                optional_reason = "Uses LTX API for text encoding" if has_api_key else None
+                description += " (optional with API key)" if has_remote_text_encoding else ""
+                optional_reason = "Uses LTX API for text encoding" if has_remote_text_encoding else None
 
             models.append(
                 ModelFileStatus(
@@ -131,6 +134,8 @@ class ModelsHandler(StateHandlerBase):
                     expected_size=spec.expected_size_bytes,
                     required=required,
                     is_folder=spec.is_folder,
+                    relative_path=spec.relative_path.as_posix(),
+                    resolved_path=str(resolved_path),
                     optional_reason=optional_reason if model_type == "text_encoder" else None,
                 )
             )

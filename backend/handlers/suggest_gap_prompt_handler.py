@@ -71,6 +71,9 @@ class SuggestGapPromptHandler(StateHandlerBase):
         self._http = http
 
     def suggest_gap(self, req: SuggestGapPromptRequest) -> SuggestGapPromptResponse:
+        if self.config.offline_mode:
+            raise HTTPError(503, "GAP_PROMPT_SUGGESTION_UNAVAILABLE_OFFLINE")
+
         before_frame = _read_image_file_as_base64(req.beforeFrame)
         after_frame = _read_image_file_as_base64(req.afterFrame)
         input_image = _read_image_file_as_base64(req.inputImage)

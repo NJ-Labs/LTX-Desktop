@@ -867,7 +867,7 @@ export function GenSpace() {
     setGenSpaceIcLoraSource,
     setPendingIcLoraUpdate,
   } = useProjects()
-  const { shouldVideoGenerateWithLtxApi, forceApiGenerations, settings: appSettings } = useAppSettings()
+  const { shouldVideoGenerateWithLtxApi, forceApiGenerations, settings: appSettings, offlineMode } = useAppSettings()
   const [mode, setMode] = useState<'image' | 'video' | 'retake' | 'ic-lora'>('video')
   const [prompt, setPrompt] = useState('')
   const [inputImage, setInputImage] = useState<string | null>(null)
@@ -1642,6 +1642,7 @@ export function GenSpace() {
           forceApiGenerations={forceApiGenerations}
           hasLtxApiKey={appSettings.hasLtxApiKey}
           isGenerating={isGenerating}
+          remoteServicesEnabled={!offlineMode}
         />
 
         {/* Prompt bar */}

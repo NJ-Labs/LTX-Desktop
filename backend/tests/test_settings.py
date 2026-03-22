@@ -177,6 +177,11 @@ class TestModelsDirAdminGuard:
         assert test_state.state.app_settings.models_dir == ""
         assert test_state.models.models_dir == test_state.config.default_models_dir
 
+    def test_effective_models_dir_uses_forced_override(self, client, test_state):
+        test_state.config.forced_models_dir = Path("/mounted/models")
+        test_state.state.app_settings.models_dir = "/custom/models"
+        assert test_state.models.models_dir == Path("/mounted/models")
+
     def test_models_dir_persists_and_loads(self, client, test_state, default_app_settings):
         r = client.post(
             "/api/settings",

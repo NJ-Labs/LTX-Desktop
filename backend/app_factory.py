@@ -5,12 +5,13 @@ from __future__ import annotations
 import base64
 import hmac
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.responses import Response as StarletteResponse
 
 from _routes._errors import HTTPError
@@ -42,11 +43,20 @@ def create_app(
     title: str = "LTX-2 Video Generation Server",
     auth_token: str = "",
     admin_token: str = "",
+    static_dir: Path | None = None,
+    media_roots: list[Path] | None = None,
 ) -> FastAPI:
     """Create a configured FastAPI app bound to the provided handler."""
     init_state_service(handler)
 
-    app = FastAPI(title=title)
+    serve_frontend = static_dir is not None and static_dir.exists()
+
+    app = FastAPI(
+        title=title,
+        docs_url=None if serve_frontend else "/docs",
+        redoc_url=None if serve_frontend else "/redoc",
+        openapi_url=None if serve_frontend else "/openapi.json",
+    )
     app.state.admin_token = admin_token  # type: ignore[attr-defined]
     app.add_middleware(
         CORSMiddleware,
@@ -116,5 +126,55 @@ def create_app(
     app.include_router(retake_router)
     app.include_router(ic_lora_router)
     app.include_router(runtime_policy_router)
+
+    allowed_media_roots = [root.resolve() for root in (media_roots or [])]
+
+    def _is_within_root(candidate: Path, root: Path) -> bool:
+        try:
+            candidate.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    if allowed_media_roots:
+        @app.get("/media", response_model=None)
+        async def _serve_media_file(path: str = "") -> FileResponse | JSONResponse:  # pyright: ignore[reportUnusedFunction]
+            if not path:
+                return JSONResponse(status_code=400, content={"error": "Missing path"})
+
+            candidate = Path(path).expanduser()
+            if not candidate.is_absolute():
+                return JSONResponse(status_code=400, content={"error": "Absolute path required"})
+
+            try:
+                resolved = candidate.resolve(strict=True)
+            except FileNotFoundError:
+                return JSONResponse(status_code=404, content={"error": "Not Found"})
+
+            if not resolved.is_file():
+                return JSONResponse(status_code=404, content={"error": "Not Found"})
+
+            if not any(_is_within_root(resolved, root) for root in allowed_media_roots):
+                return JSONResponse(status_code=403, content={"error": "Forbidden"})
+
+            return FileResponse(resolved)
+
+    if serve_frontend:
+        index_file = static_dir / "index.html"
+
+        @app.get("/")
+        async def _serve_frontend_root() -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+            return FileResponse(index_file)
+
+        @app.get("/{full_path:path}", response_model=None)
+        async def _serve_frontend_asset(full_path: str) -> FileResponse | JSONResponse:  # pyright: ignore[reportUnusedFunction]
+            if full_path.startswith(("api/", "health", "readyz", "docs", "openapi.json", "media")):
+                return JSONResponse(status_code=404, content={"error": "Not Found"})
+
+            candidate = static_dir / full_path
+            if candidate.exists() and candidate.is_file():
+                return FileResponse(candidate)
+
+            return FileResponse(index_file)
 
     return app

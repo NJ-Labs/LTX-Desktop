@@ -15,9 +15,9 @@ import { sendAnalyticsEvent } from './analytics'
 
 function logAppVersion(): void {
   if (!app.isPackaged) {
-    console.log('[LTX Desktop] Running in development mode')
+    console.log('[LTX Studio] Running in development mode')
   } else {
-    console.log(`[LTX Desktop] Version ${app.getVersion()}`)
+    console.log(`[LTX Studio] Version ${app.getVersion()}`)
   }
 }
 

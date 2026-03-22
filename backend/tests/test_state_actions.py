@@ -178,6 +178,18 @@ def test_startup_warmup_keeps_fast_on_gpu_and_preloads_zit_on_cpu(test_state, fa
     assert fake_services.image_generation_pipeline.device is None
 
 
+def test_startup_warmup_can_force_preload_without_saved_setting(test_state, fake_services, create_fake_model_files):
+    create_fake_model_files(include_zit=True)
+    test_state.config.startup_preload_models = True
+    test_state.state.app_settings.load_on_startup = False
+
+    test_state.health.default_warmup()
+
+    assert isinstance(test_state.state.startup, StartupReady)
+    assert isinstance(test_state.state.gpu_slot, GpuSlot)
+    assert isinstance(test_state.state.cpu_slot, CpuSlot)
+
+
 def test_forced_mode_warmup_skips_fast_pipeline(test_state):
     test_state.config.force_api_generations = True
     test_state.config.required_model_types = frozenset()
@@ -188,6 +200,25 @@ def test_forced_mode_warmup_skips_fast_pipeline(test_state):
 
     assert test_state.state.gpu_slot is None
     assert test_state.state.cpu_slot is None
+
+
+def test_require_local_mode_reports_missing_models_as_error(test_state):
+    test_state.config.require_local_mode = True
+
+    test_state.health.default_warmup()
+
+    assert isinstance(test_state.state.startup, StartupError)
+    assert "Required models are missing" in test_state.state.startup.error
+
+
+def test_require_local_mode_rejects_api_only_runtime(test_state):
+    test_state.config.require_local_mode = True
+    test_state.config.force_api_generations = True
+
+    test_state.health.default_warmup()
+
+    assert isinstance(test_state.state.startup, StartupError)
+    assert "Local model serving is required" in test_state.state.startup.error
 
 
 def test_retake_pipeline_eviction(test_state):

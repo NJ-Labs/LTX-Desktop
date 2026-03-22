@@ -10,17 +10,19 @@ export function FreeApiKeyBubble({
   forceApiGenerations,
   hasLtxApiKey,
   isGenerating,
+  remoteServicesEnabled,
 }: {
   forceApiGenerations: boolean
   hasLtxApiKey: boolean
   isGenerating: boolean
+  remoteServicesEnabled: boolean
 }) {
   const [dismissed, setDismissed] = useState(() => dismissedThisSession)
   const [visible, setVisible] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    if (isGenerating && !dismissed && !forceApiGenerations && !hasLtxApiKey) {
+    if (remoteServicesEnabled && isGenerating && !dismissed && !forceApiGenerations && !hasLtxApiKey) {
       timerRef.current = setTimeout(() => setVisible(true), SHOW_DELAY_MS)
     } else {
       if (timerRef.current) clearTimeout(timerRef.current)
@@ -30,7 +32,7 @@ export function FreeApiKeyBubble({
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [isGenerating, dismissed, forceApiGenerations, hasLtxApiKey])
+  }, [forceApiGenerations, hasLtxApiKey, isGenerating, dismissed, remoteServicesEnabled])
 
   if (!visible) return null
 

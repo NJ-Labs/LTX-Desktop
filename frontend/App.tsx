@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, AlertCircle, Settings, FileText } from 'lucide-react'
-import { backendFetch } from './lib/backend'
 import { ProjectProvider, useProjects } from './contexts/ProjectContext'
 import { KeyboardShortcutsProvider } from './contexts/KeyboardShortcutsContext'
 import { AppSettingsProvider, useAppSettings } from './contexts/AppSettingsContext'
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal'
 import { useBackend } from './hooks/use-backend'
+import { useModelAvailability } from './hooks/use-model-availability'
 import { logger } from './lib/logger'
 import { Home } from './views/Home'
 import { Project } from './views/Project'
@@ -15,15 +15,18 @@ import { PythonSetup } from './components/PythonSetup'
 import { SettingsModal, type SettingsTabId } from './components/SettingsModal'
 import { LogViewer } from './components/LogViewer'
 import { ApiGatewayModal, type ApiGatewaySection } from './components/ApiGatewayModal'
+import { ModelStatusBadge } from './components/ModelStatusBadge'
+import { ModelStatusDialog } from './components/ModelStatusDialog'
 import { Button } from './components/ui/button'
+import { isWebMode } from './lib/web-mode'
 
 type SetupState = 'loading' | { needsSetup: boolean; needsLicense: boolean }
-type RequiredModelsGateState = 'checking' | 'missing' | 'ready'
 
 function AppContent() {
+  const webMode = isWebMode()
   const { currentView } = useProjects()
   const { status, processStatus, isLoading: backendLoading, error: backendError } = useBackend()
-  const { settings, saveLtxApiKey, saveFalApiKey, forceApiGenerations, isLoaded, runtimePolicyLoaded } = useAppSettings()
+  const { settings, saveLtxApiKey, saveFalApiKey, forceApiGenerations, isLoaded, runtimePolicyLoaded, offlineMode } = useAppSettings()
 
   const [pythonReady, setPythonReady] = useState<boolean | null>(null)
   const [backendStarted, setBackendStarted] = useState(false)
@@ -33,8 +36,9 @@ function AppContent() {
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false)
   const [isFinalizingFirstRun, setIsFinalizingFirstRun] = useState(false)
   const [firstRunFinalizeError, setFirstRunFinalizeError] = useState<string | null>(null)
-  const [requiredModelsGate, setRequiredModelsGate] = useState<RequiredModelsGateState>('checking')
+  const [isModelStatusDialogOpen, setIsModelStatusDialogOpen] = useState(false)
   const setupCompletionInFlightRef = useRef<Promise<void> | null>(null)
+  const hasShownModelStatusWarningRef = useRef(false)
 
   type ApiGatewayRequest = {
     requiredKeys: Array<'ltx' | 'fal'>
@@ -49,6 +53,12 @@ function AppContent() {
   const isBackendRestarting = processStatus === 'restarting'
   const isBackendDead = processStatus === 'dead'
   const waitingForRuntimePolicy = processStatus === 'alive' && !runtimePolicyLoaded
+  const shouldTrackModelAvailability =
+    status.connected &&
+    setupState !== 'loading' &&
+    !waitingForRuntimePolicy &&
+    !(typeof setupState === 'object' && (setupState.needsSetup || setupState.needsLicense))
+  const modelAvailability = useModelAvailability(shouldTrackModelAvailability)
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -62,6 +72,10 @@ function AppContent() {
 
   useEffect(() => {
     const handler = (e: Event) => {
+      if (offlineMode) {
+        return
+      }
+
       const detail = (e as CustomEvent).detail ?? {}
       const requiredKeys = Array.isArray(detail.requiredKeys) ? detail.requiredKeys : ['ltx']
       setApiGatewayRequest({
@@ -74,7 +88,7 @@ function AppContent() {
     }
     window.addEventListener('open-api-gateway', handler)
     return () => window.removeEventListener('open-api-gateway', handler)
-  }, [])
+  }, [offlineMode])
 
   useEffect(() => {
     const check = async () => {
@@ -177,24 +191,6 @@ function AppContent() {
   const shouldAutoFinalizeForcedFirstRun =
     isForcedFirstRun && isLoaded && settings.hasLtxApiKey && !isFinalizingFirstRun && !firstRunFinalizeError
 
-  const areRequiredModelsDownloaded = useCallback(async () => {
-    const response = await backendFetch('/api/models/status')
-    if (!response.ok) {
-      throw new Error(`Model status fetch failed with status ${response.status}`)
-    }
-    const payload = (await response.json()) as { all_downloaded?: boolean }
-    return payload.all_downloaded === true
-  }, [])
-
-  const handleMissingModelsComplete = useCallback(async () => {
-    const allDownloaded = await areRequiredModelsDownloaded()
-    if (!allDownloaded) {
-      throw new Error('Required models are still missing. Please finish downloading before continuing.')
-    }
-    await handleFirstRunComplete()
-    setRequiredModelsGate('ready')
-  }, [areRequiredModelsDownloaded, handleFirstRunComplete])
-
   useEffect(() => {
     if (!shouldAutoFinalizeForcedFirstRun) return
     void handleFirstRunComplete().catch(() => {
@@ -203,44 +199,18 @@ function AppContent() {
   }, [shouldAutoFinalizeForcedFirstRun, handleFirstRunComplete])
 
   useEffect(() => {
-    if (setupState === 'loading' || waitingForRuntimePolicy || backendLoading || !status.connected) {
+    if (
+      !shouldTrackModelAvailability ||
+      !modelAvailability.isLoaded ||
+      modelAvailability.level === 'active' ||
+      hasShownModelStatusWarningRef.current
+    ) {
       return
     }
 
-    if (forceApiGenerations || setupState.needsLicense || setupState.needsSetup) {
-      setRequiredModelsGate('ready')
-      return
-    }
-
-    let cancelled = false
-    setRequiredModelsGate('checking')
-
-    const checkRequiredModels = async () => {
-      try {
-        const allDownloaded = await areRequiredModelsDownloaded()
-        if (cancelled) return
-        setRequiredModelsGate(allDownloaded ? 'ready' : 'missing')
-      } catch (e) {
-        logger.error(`Failed to check required model status: ${e}`)
-        if (cancelled) return
-        // Do not block app launch on transient status-check failures.
-        setRequiredModelsGate('ready')
-      }
-    }
-
-    void checkRequiredModels()
-
-    return () => {
-      cancelled = true
-    }
-  }, [
-    areRequiredModelsDownloaded,
-    backendLoading,
-    forceApiGenerations,
-    setupState,
-    status.connected,
-    waitingForRuntimePolicy,
-  ])
+    hasShownModelStatusWarningRef.current = true
+    setIsModelStatusDialogOpen(true)
+  }, [modelAvailability, shouldTrackModelAvailability])
 
   const restartingOverlay = isBackendRestarting ? (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -254,10 +224,10 @@ function AppContent() {
     </div>
   ) : null
 
-  const showGlobalControls = currentView !== 'home' && status.connected && setupState !== 'loading' && !setupState.needsSetup
-  const shouldBlockUntilSettingsLoaded = forceApiGenerations && !isLoaded
-  const shouldShowForcedFirstRunUpsell = isForcedFirstRun && isLoaded && !settings.hasLtxApiKey
-  const shouldShowGlobalForcedUpsell = forceApiGenerations && setupState !== 'loading' && !setupState.needsSetup && isLoaded && !settings.hasLtxApiKey
+  const showGlobalControls = status.connected && setupState !== 'loading' && !setupState.needsSetup
+  const shouldBlockUntilSettingsLoaded = !offlineMode && forceApiGenerations && !isLoaded
+  const shouldShowForcedFirstRunUpsell = !offlineMode && isForcedFirstRun && isLoaded && !settings.hasLtxApiKey
+  const shouldShowGlobalForcedUpsell = !offlineMode && forceApiGenerations && setupState !== 'loading' && !setupState.needsSetup && isLoaded && !settings.hasLtxApiKey
   const shouldBlockForLtxKey = shouldShowForcedFirstRunUpsell || shouldShowGlobalForcedUpsell
 
   useEffect(() => {
@@ -272,7 +242,7 @@ function AppContent() {
     }
   }, [shouldBlockForLtxKey, apiGatewayRequest])
 
-  const shouldShowGateway = apiGatewayRequest !== null
+  const shouldShowGateway = !offlineMode && apiGatewayRequest !== null
 
   const gatewaySections: ApiGatewaySection[] = useMemo(() => {
     if (!apiGatewayRequest) return []
@@ -359,20 +329,13 @@ function AppContent() {
     )
   }
 
-  const waitingForRequiredModels =
-    requiredModelsGate === 'checking' &&
-    status.connected &&
-    setupState !== 'loading' &&
-    !waitingForRuntimePolicy &&
-    !forceApiGenerations
-
-  if (backendLoading || setupState === 'loading' || waitingForRuntimePolicy || waitingForRequiredModels) {
+  if (backendLoading || setupState === 'loading' || waitingForRuntimePolicy) {
     return (
       <div className="relative h-screen w-screen">
         <div className="h-screen bg-background flex items-center justify-center">
           <div className="text-center">
             <Loader2 className="h-12 w-12 text-primary animate-spin mx-auto mb-4" />
-            <h2 className="text-xl font-semibold text-foreground mb-2">Starting LTX Desktop...</h2>
+            <h2 className="text-xl font-semibold text-foreground mb-2">Starting LTX Studio...</h2>
             <p className="text-muted-foreground">Initializing the inference engine</p>
           </div>
         </div>
@@ -419,10 +382,6 @@ function AppContent() {
     return <LaunchGate showLicenseStep={false} onComplete={handleFirstRunComplete} />
   }
 
-  if (requiredModelsGate === 'missing') {
-    return <LaunchGate showLicenseStep={false} onComplete={handleMissingModelsComplete} />
-  }
-
   const renderView = () => {
     switch (currentView) {
       case 'home':
@@ -442,13 +401,23 @@ function AppContent() {
 
       {showGlobalControls && (
         <div className="fixed top-[18px] right-3 z-50 flex items-center gap-1">
-          <button
-            onClick={() => setIsLogViewerOpen(true)}
-            className="h-8 w-8 flex items-center justify-center rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-            title="View Backend Logs"
-          >
-            <FileText className="h-4 w-4" />
-          </button>
+          {modelAvailability.isLoaded && (
+            <ModelStatusBadge
+              level={modelAvailability.level}
+              label={modelAvailability.label}
+              summary={modelAvailability.summary}
+              onClick={() => setIsModelStatusDialogOpen(true)}
+            />
+          )}
+          {!webMode && (
+            <button
+              onClick={() => setIsLogViewerOpen(true)}
+              className="h-8 w-8 flex items-center justify-center rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+              title="View Backend Logs"
+            >
+              <FileText className="h-4 w-4" />
+            </button>
+          )}
           <button
             onClick={() => setIsSettingsOpen(true)}
             className="h-8 w-8 flex items-center justify-center rounded-md text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
@@ -475,6 +444,16 @@ function AppContent() {
         title={apiGatewayRequest?.title ?? 'Connect API Keys'}
         description={apiGatewayRequest?.description ?? 'Add the required API keys to continue.'}
         sections={gatewaySections}
+      />
+      <ModelStatusDialog
+        isOpen={isModelStatusDialogOpen && modelAvailability.isLoaded}
+        state={modelAvailability}
+        onClose={() => setIsModelStatusDialogOpen(false)}
+        onOpenSettings={() => {
+          setIsModelStatusDialogOpen(false)
+          setSettingsInitialTab('general')
+          setIsSettingsOpen(true)
+        }}
       />
 
       {shouldBlockUntilSettingsLoaded && (

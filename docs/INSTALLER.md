@@ -1,6 +1,6 @@
-# LTX Desktop - Installer Build Guide
+# LTX Studio - Installer Build Guide
 
-This guide explains how to build a distributable installer for **LTX Desktop**.
+This guide explains how to build a distributable installer for **LTX Studio**.
 
 - For running from source and debugging: see [`README.md`](../README.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md).
 - For end-user requirements and first-run behavior: see [`README.md`](../README.md).
@@ -82,22 +82,22 @@ The underlying `local-build.sh` / `local-build.ps1` scripts also accept:
 ### macOS
 ```
 release/
-  └── LTX Desktop-<version>-arm64.dmg
+  └── LTX Studio-<version>-arm64.dmg
 ```
 
 ### Linux
 ```
 release/
-  ├── LTX Desktop-x86_64.AppImage
-  ├── LTX Desktop-amd64.deb
-  ├── LTX Desktop-arm64.AppImage
-  └── LTX Desktop-arm64.deb
+  ├── LTX Studio-x86_64.AppImage
+  ├── LTX Studio-amd64.deb
+  ├── LTX Studio-arm64.AppImage
+  └── LTX Studio-arm64.deb
 ```
 
 ### Windows
 ```
 release/
-  └── LTX Desktop-<version>-Setup.exe
+  └── LTX Studio-<version>-Setup.exe
 ```
 
 ## Application Icon
