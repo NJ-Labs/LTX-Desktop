@@ -24,10 +24,15 @@ export interface AppSettings {
   promptCacheSize: number
   promptEnhancerEnabledT2V: boolean
   promptEnhancerEnabledI2V: boolean
+  promptEnhancerBaseUrl: string
   seedLocked: boolean
   lockedSeed: number
   modelsDir: string
+  localDurationCapEnabled: boolean
+  localDurationCaps: Record<string, number>
 }
+
+export const DEFAULT_LOCAL_DURATION_CAPS: Record<string, number> = { '540p': 20, '720p': 10, '1080p': 5, '1440p': 5, '2160p': 5 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   useTorchCompile: false,
@@ -42,9 +47,12 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   promptCacheSize: 1,
   promptEnhancerEnabledT2V: false,
   promptEnhancerEnabledI2V: false,
+  promptEnhancerBaseUrl: '',
   seedLocked: false,
   lockedSeed: 42,
   modelsDir: '',
+  localDurationCapEnabled: true,
+  localDurationCaps: DEFAULT_LOCAL_DURATION_CAPS,
 }
 
 type BackendProcessStatus = 'alive' | 'restarting' | 'dead'
@@ -60,6 +68,7 @@ interface AppSettingsContextValue {
   saveGeminiApiKey: (value: string) => Promise<void>
   forceApiGenerations: boolean
   offlineMode: boolean
+  serverDataDir: string
   shouldVideoGenerateWithLtxApi: boolean
 }
 
@@ -91,9 +100,12 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     promptCacheSize: data.promptCacheSize ?? DEFAULT_APP_SETTINGS.promptCacheSize,
     promptEnhancerEnabledT2V: data.promptEnhancerEnabledT2V ?? DEFAULT_APP_SETTINGS.promptEnhancerEnabledT2V,
     promptEnhancerEnabledI2V: data.promptEnhancerEnabledI2V ?? DEFAULT_APP_SETTINGS.promptEnhancerEnabledI2V,
+    promptEnhancerBaseUrl: data.promptEnhancerBaseUrl ?? DEFAULT_APP_SETTINGS.promptEnhancerBaseUrl,
     seedLocked: data.seedLocked ?? DEFAULT_APP_SETTINGS.seedLocked,
     lockedSeed: data.lockedSeed ?? DEFAULT_APP_SETTINGS.lockedSeed,
     modelsDir: data.modelsDir ?? DEFAULT_APP_SETTINGS.modelsDir,
+    localDurationCapEnabled: data.localDurationCapEnabled ?? DEFAULT_APP_SETTINGS.localDurationCapEnabled,
+    localDurationCaps: { ...DEFAULT_LOCAL_DURATION_CAPS, ...(data.localDurationCaps ?? {}) },
   }
 }
 
@@ -103,6 +115,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [runtimePolicyLoaded, setRuntimePolicyLoaded] = useState(false)
   const [forceApiGenerations, setForceApiGenerations] = useState(true)
   const [offlineMode, setOfflineMode] = useState(false)
+  const [serverDataDir, setServerDataDir] = useState('')
   const [backendProcessStatus, setBackendProcessStatus] = useState<BackendProcessStatus | null>(null)
 
   useEffect(() => {
@@ -118,7 +131,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           throw new Error(`Runtime policy fetch failed with status ${response.status}`)
         }
 
-        const payload = (await response.json()) as { force_api_generations?: unknown; offline_mode?: unknown }
+        const payload = (await response.json()) as { force_api_generations?: unknown; offline_mode?: unknown; data_dir?: unknown }
         if (typeof payload.force_api_generations !== 'boolean') {
           throw new Error('Runtime policy response missing force_api_generations boolean')
         }
@@ -129,6 +142,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
         if (!cancelled) {
           setForceApiGenerations(payload.force_api_generations)
           setOfflineMode(payload.offline_mode)
+          setServerDataDir(typeof payload.data_dir === 'string' ? payload.data_dir : '')
         }
       } catch {
         if (!cancelled) {
@@ -301,9 +315,10 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       saveGeminiApiKey,
       forceApiGenerations,
       offlineMode,
+      serverDataDir,
       shouldVideoGenerateWithLtxApi,
     }),
-    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiKey, saveGeminiApiKey, saveLtxApiKey, settings, shouldVideoGenerateWithLtxApi, updateSettings],
+    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiKey, saveGeminiApiKey, saveLtxApiKey, serverDataDir, settings, shouldVideoGenerateWithLtxApi, updateSettings],
   )
 
   return <AppSettingsContext.Provider value={contextValue}>{children}</AppSettingsContext.Provider>

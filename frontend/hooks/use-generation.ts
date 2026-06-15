@@ -26,8 +26,8 @@ interface GenerationProgress {
 }
 
 interface UseGenerationReturn extends GenerationState {
-  generate: (prompt: string, imagePath: string | null, settings: GenerationSettings, audioPath?: string | null) => Promise<void>
-  generateImage: (prompt: string, settings: GenerationSettings) => Promise<void>
+  generate: (prompt: string, imagePath: string | null, settings: GenerationSettings, audioPath?: string | null) => Promise<{ success: boolean; videoPath: string | null }>
+  generateImage: (prompt: string, settings: GenerationSettings) => Promise<{ success: boolean }>
   cancel: () => void
   reset: () => void
 }
@@ -36,6 +36,7 @@ const IMAGE_SHORT_SIDE_BY_RESOLUTION: Record<string, number> = {
   '1080p': 1080,
   '1440p': 1440,
   '2048p': 2048,
+  '2160p': 2160,
 }
 
 const IMAGE_ASPECT_RATIO_VALUE: Record<string, number> = {
@@ -65,7 +66,10 @@ function getImageDimensions(settings: GenerationSettings): { width: number; heig
 }
 
 // Map phase to user-friendly message
-function getPhaseMessage(phase: string): string {
+function getPhaseMessage(phase: string, currentStep?: number | null, totalSteps?: number | null): string {
+  const steps = currentStep != null && totalSteps != null && totalSteps > 0
+    ? ` (${currentStep}/${totalSteps})`
+    : ''
   switch (phase) {
     case 'validating_request':
       return 'Validating request...'
@@ -78,7 +82,7 @@ function getPhaseMessage(phase: string): string {
     case 'encoding_text':
       return 'Encoding prompt...'
     case 'inference':
-      return 'Generating...'
+      return `Generating...${steps}`
     case 'downloading_output':
       return 'Downloading output...'
     case 'decoding':
@@ -112,10 +116,8 @@ export function useGeneration(): UseGenerationReturn {
     imagePath: string | null,
     settings: GenerationSettings,
     audioPath?: string | null,
-  ) => {
-    const statusMsg = settings.model === 'pro'
-      ? 'Loading Pro model & generating...'
-      : 'Generating video...'
+  ): Promise<{ success: boolean; videoPath: string | null }> => {
+    const statusMsg = 'Loading model...'
 
     setState({
       isGenerating: true,
@@ -133,6 +135,8 @@ export function useGeneration(): UseGenerationReturn {
     abortControllerRef.current = new AbortController()
     let progressInterval: ReturnType<typeof setInterval> | null = null
     let shouldApplyPollingUpdates = true
+    let succeeded = false
+    let resultVideoPath: string | null = null
 
     try {
       // Prepare JSON body
@@ -155,9 +159,9 @@ export function useGeneration(): UseGenerationReturn {
 
       // Poll for real progress from backend with time-based interpolation
       let lastPhase = ''
-      let inferenceStartTime = 0
-      // Estimated inference time in seconds based on model
-      const estimatedInferenceTime = settings.model === 'pro' ? 120 : 45
+      let loadingModelStartTime = 0
+      // Estimated loading time in seconds based on model
+      const estimatedLoadingTime = settings.model === 'pro' ? 60 : 30
       
       const pollProgress = async () => {
         if (!shouldApplyPollingUpdates) return
@@ -167,19 +171,24 @@ export function useGeneration(): UseGenerationReturn {
             const data: GenerationProgress = await res.json()
             if (!shouldApplyPollingUpdates) return
 
+            // Ignore idle responses (phase="" means backend hasn't started yet)
+            if (!data.phase || data.status === 'idle') return
+
             let displayProgress = data.progress
-            let statusMessage = getPhaseMessage(data.phase)
+            let statusMessage = getPhaseMessage(data.phase, data.currentStep, data.totalSteps)
             
-            // Time-based interpolation during inference phase
-            if (data.phase === 'inference') {
-              if (lastPhase !== 'inference') {
-                inferenceStartTime = Date.now()
+            // Time-based interpolation during loading_model phase
+            if (data.phase === 'loading_model') {
+              if (lastPhase !== 'loading_model') {
+                loadingModelStartTime = Date.now()
               }
-              const elapsed = (Date.now() - inferenceStartTime) / 1000
-              // Interpolate from 15% to 95% based on estimated time
-              const inferenceProgress = Math.min(elapsed / estimatedInferenceTime, 0.95)
-              displayProgress = 15 + Math.floor(inferenceProgress * 80)
+              const elapsed = (Date.now() - loadingModelStartTime) / 1000
+              // Interpolate from 5% to 12% based on estimated loading time
+              const loadingProgress = Math.min(elapsed / estimatedLoadingTime, 0.95)
+              displayProgress = 5 + Math.floor(loadingProgress * 7)
             }
+
+            // inference: use real progress from backend (set by _on_denoising_step callback)
 
             // Keep API/local completion as a terminal response state, not polling state.
             // Polling complete means backend state is finalized, but request can still be in-flight.
@@ -220,6 +229,7 @@ export function useGeneration(): UseGenerationReturn {
       const result = await response.json()
       
       if (result.status === 'complete' && result.video_path) {
+        resultVideoPath = result.video_path
         setState({
           isGenerating: false,
           progress: 100,
@@ -232,6 +242,7 @@ export function useGeneration(): UseGenerationReturn {
           imagePaths: [],
           error: null,
         })
+        succeeded = true
       } else if (result.status === 'cancelled') {
         setState(prev => ({
           ...prev,
@@ -262,6 +273,7 @@ export function useGeneration(): UseGenerationReturn {
         clearInterval(progressInterval)
       }
     }
+    return { success: succeeded, videoPath: resultVideoPath }
   }, [])
 
   const cancel = useCallback(async () => {
@@ -285,7 +297,7 @@ export function useGeneration(): UseGenerationReturn {
   const generateImage = useCallback(async (
     prompt: string,
     settings: GenerationSettings
-  ) => {
+  ): Promise<{ success: boolean }> => {
     if (forceApiGenerations) {
       try {
         const response = await backendFetch('/api/settings')
@@ -301,7 +313,7 @@ export function useGeneration(): UseGenerationReturn {
                 blocking: false,
               },
             }))
-            return
+            return { success: false }
           }
         }
       } catch {
@@ -314,7 +326,7 @@ export function useGeneration(): UseGenerationReturn {
               blocking: false,
             },
           }))
-          return
+          return { success: false }
         }
       }
     }
@@ -335,6 +347,7 @@ export function useGeneration(): UseGenerationReturn {
     })
 
     abortControllerRef.current = new AbortController()
+    let succeeded = false
 
     try {
       // Skip prompt enhancement for T2I - use original prompt directly
@@ -418,6 +431,7 @@ export function useGeneration(): UseGenerationReturn {
             imagePaths: rawPaths,   // All image paths
             error: null,
           })
+          succeeded = true
         }
       } else if (result.status === 'cancelled') {
         setState(prev => ({
@@ -444,6 +458,7 @@ export function useGeneration(): UseGenerationReturn {
         }))
       }
     }
+    return { success: succeeded }
   }, [appSettings.hasFalApiKey, forceApiGenerations, refreshSettings])
 
   const reset = useCallback(() => {

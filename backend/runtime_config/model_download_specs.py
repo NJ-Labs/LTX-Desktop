@@ -25,8 +25,13 @@ class ModelFileDownloadSpec:
 
 MODEL_FILE_ORDER: tuple[ModelFileType, ...] = (
     "checkpoint",
+    "dev_checkpoint",
     "upsampler",
+    "spatial_upscaler_x2_v11",
+    "spatial_upscaler_x15",
     "distilled_lora",
+    "distilled_lora_384",
+    "distilled_lora_384_v11",
     "ic_lora",
     "depth_processor",
     "person_detector",
@@ -44,6 +49,13 @@ DEFAULT_MODEL_DOWNLOAD_SPECS: dict[ModelFileType, ModelFileDownloadSpec] = {
         repo_id="Lightricks/LTX-2.3",
         description="Main transformer model",
     ),
+    "dev_checkpoint": ModelFileDownloadSpec(
+        relative_path=Path("ltx-2.3-22b-dev.safetensors"),
+        expected_size_bytes=46_000_000_000,
+        is_folder=False,
+        repo_id="Lightricks/LTX-2.3",
+        description="Full LTX-2.3 22B dev model (bf16, trainable)",
+    ),
     "upsampler": ModelFileDownloadSpec(
         relative_path=Path("ltx-2.3-spatial-upscaler-x2-1.0.safetensors"),
         expected_size_bytes=1_900_000_000,
@@ -51,12 +63,40 @@ DEFAULT_MODEL_DOWNLOAD_SPECS: dict[ModelFileType, ModelFileDownloadSpec] = {
         repo_id="Lightricks/LTX-2.3",
         description="2x Upscaler",
     ),
+    "spatial_upscaler_x2_v11": ModelFileDownloadSpec(
+        relative_path=Path("ltx-2.3-spatial-upscaler-x2-1.1.safetensors"),
+        expected_size_bytes=1_900_000_000,
+        is_folder=False,
+        repo_id="Lightricks/LTX-2.3",
+        description="2x spatial upscaler v1.1 (multiscale)",
+    ),
+    "spatial_upscaler_x15": ModelFileDownloadSpec(
+        relative_path=Path("ltx-2.3-spatial-upscaler-x1.5-1.0.safetensors"),
+        expected_size_bytes=1_600_000_000,
+        is_folder=False,
+        repo_id="Lightricks/LTX-2.3",
+        description="1.5x spatial upscaler (multiscale)",
+    ),
     "distilled_lora": ModelFileDownloadSpec(
         relative_path=Path("ltx-2-19b-distilled-lora-384.safetensors"),
         expected_size_bytes=400_000_000,
         is_folder=False,
         repo_id="Lightricks/LTX-2",
         description="LoRA for Pro model",
+    ),
+    "distilled_lora_384": ModelFileDownloadSpec(
+        relative_path=Path("ltx-2.3-22b-distilled-lora-384.safetensors"),
+        expected_size_bytes=500_000_000,
+        is_folder=False,
+        repo_id="Lightricks/LTX-2.3",
+        description="Distilled LoRA-384 for the full model",
+    ),
+    "distilled_lora_384_v11": ModelFileDownloadSpec(
+        relative_path=Path("ltx-2.3-22b-distilled-lora-384-1.1.safetensors"),
+        expected_size_bytes=500_000_000,
+        is_folder=False,
+        repo_id="Lightricks/LTX-2.3",
+        description="Distilled LoRA-384 v1.1 for the full model",
     ),
     "ic_lora": ModelFileDownloadSpec(
         relative_path=Path("ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors"),
@@ -105,6 +145,20 @@ DEFAULT_MODEL_DOWNLOAD_SPECS: dict[ModelFileType, ModelFileDownloadSpec] = {
 
 DEFAULT_REQUIRED_MODEL_TYPES: frozenset[ModelFileType] = frozenset(
     {"checkpoint", "upsampler", "zit"}
+)
+
+
+# Optional LTX-2.3 variants that are not required for the app to be "active",
+# but are scanned and surfaced in the model inventory so users can confirm
+# whether the full/dev model, distilled LoRAs and extra upscalers are present.
+INVENTORY_OPTIONAL_MODEL_TYPES: frozenset[ModelFileType] = frozenset(
+    {
+        "dev_checkpoint",
+        "spatial_upscaler_x2_v11",
+        "spatial_upscaler_x15",
+        "distilled_lora_384",
+        "distilled_lora_384_v11",
+    }
 )
 
 

@@ -1,5 +1,6 @@
-import { AlertCircle, CheckCircle2, CircleDashed, FolderSearch, TriangleAlert, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, CircleDashed, FolderSearch, Loader2, TriangleAlert, X, Zap } from 'lucide-react'
 import { Button } from './ui/button'
+import { usePreloadModels } from '../hooks/use-preload-models'
 import type { ModelAvailabilityState } from '../hooks/use-model-availability'
 
 interface ModelStatusDialogProps {
@@ -26,7 +27,11 @@ function titleFor(level: ModelAvailabilityState['level']): string {
 }
 
 export function ModelStatusDialog({ isOpen, state, onClose, onOpenSettings }: ModelStatusDialogProps) {
+  const { preload, isPreloading, error: preloadError } = usePreloadModels()
+
   if (!isOpen) return null
+
+  const preloadBusy = isPreloading || state.startupStatus === 'loading'
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
@@ -109,8 +114,52 @@ export function ModelStatusDialog({ isOpen, state, onClose, onOpenSettings }: Mo
           </div>
         )}
 
-        <div className="mt-5 flex justify-end gap-2">
+        {state.additionalModels.length > 0 && (
+          <div className="mt-4">
+            <div className="text-sm font-medium text-zinc-100">Additional models (optional)</div>
+            <div className="mt-1 text-xs text-zinc-500">
+              Full/dev model, distilled LoRAs and extra upscalers. Not required to run, but preloaded when present.
+            </div>
+            <div className="mt-2 space-y-2">
+              {state.additionalModels.map((model) => (
+                <div key={model.id} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-zinc-100">{model.name}</div>
+                      <div className="mt-1 text-xs text-zinc-400">Expected path</div>
+                      <div className="break-all text-xs text-zinc-200">{model.relativePath || 'Unknown'}</div>
+                      <div className="mt-2 text-xs text-zinc-400">Resolved path</div>
+                      <div className="break-all text-xs text-zinc-200">{model.resolvedPath || state.modelsPath || 'Unknown'}</div>
+                    </div>
+                    <div
+                      className={
+                        model.downloaded
+                          ? 'inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-300'
+                          : 'inline-flex items-center gap-1 rounded-full border border-zinc-600/40 bg-zinc-700/20 px-2 py-1 text-xs font-medium text-zinc-400'
+                      }
+                    >
+                      {model.downloaded ? <CheckCircle2 className="h-3.5 w-3.5" /> : <CircleDashed className="h-3.5 w-3.5" />}
+                      {model.downloaded ? 'Found' : 'Missing'}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {preloadError && (
+          <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-200">
+            {preloadError}
+          </div>
+        )}
+
+        <div className="mt-5 flex items-center justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Dismiss</Button>
+          <Button variant="outline" onClick={() => void preload()} disabled={preloadBusy}>
+            {preloadBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+            {preloadBusy ? 'Preloading…' : 'Preload all models'}
+          </Button>
           <Button onClick={onOpenSettings}>Open Settings</Button>
         </div>
       </div>

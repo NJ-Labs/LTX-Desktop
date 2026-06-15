@@ -17,6 +17,7 @@ from services.interfaces import (
     GpuCleaner,
     IcLoraPipeline,
     PoseProcessorPipeline,
+    ProVideoPipeline,
     RetakePipeline,
     VideoPipelineModelType,
 )
@@ -47,6 +48,7 @@ class PipelinesHandler(StateHandlerBase):
         text_handler: TextHandler,
         gpu_cleaner: GpuCleaner,
         fast_video_pipeline_class: type[FastVideoPipeline],
+        pro_video_pipeline_class: type[ProVideoPipeline],
         image_generation_pipeline_class: type[ImageGenerationPipeline],
         ic_lora_pipeline_class: type[IcLoraPipeline],
         depth_processor_pipeline_class: type[DepthProcessorPipeline],
@@ -59,6 +61,7 @@ class PipelinesHandler(StateHandlerBase):
         self._text_handler = text_handler
         self._gpu_cleaner = gpu_cleaner
         self._fast_video_pipeline_class = fast_video_pipeline_class
+        self._pro_video_pipeline_class = pro_video_pipeline_class
         self._image_generation_pipeline_class = image_generation_pipeline_class
         self._ic_lora_pipeline_class = ic_lora_pipeline_class
         self._depth_processor_pipeline_class = depth_processor_pipeline_class
@@ -77,7 +80,11 @@ class PipelinesHandler(StateHandlerBase):
     def _pipeline_matches_model_type(self, model_type: VideoPipelineModelType) -> bool:
         match self.state.gpu_slot:
             case GpuSlot(active_pipeline=VideoPipelineState(pipeline=pipeline)):
-                return pipeline.pipeline_kind == model_type
+                if pipeline.pipeline_kind != model_type:
+                    return False
+                if model_type == "pro":
+                    return getattr(pipeline, "use_upscaler", None) == self.state.app_settings.pro_model.use_upscaler
+                return True
             case _:
                 return False
 
@@ -119,13 +126,49 @@ class PipelinesHandler(StateHandlerBase):
     def _create_video_pipeline(self, model_type: VideoPipelineModelType) -> VideoPipelineState:
         gemma_root = self._text_handler.resolve_gemma_root()
 
-        checkpoint_path = str(resolve_model_path(self.models_dir, self.config.model_download_specs,"checkpoint"))
         upsampler_path = str(resolve_model_path(self.models_dir, self.config.model_download_specs,"upsampler"))
+
+        if model_type == "pro":
+            return self._create_pro_video_pipeline(gemma_root, upsampler_path)
+
+        checkpoint_path = str(resolve_model_path(self.models_dir, self.config.model_download_specs,"checkpoint"))
 
         pipeline = self._fast_video_pipeline_class.create(
             checkpoint_path,
             gemma_root,
             upsampler_path,
+            self.config.device,
+        )
+
+        state = VideoPipelineState(
+            pipeline=pipeline,
+            warmth=VideoPipelineWarmth.COLD,
+            is_compiled=False,
+        )
+        return self._compile_if_enabled(state)
+
+    def _create_pro_video_pipeline(self, gemma_root: str | None, upsampler_path: str) -> VideoPipelineState:
+        dev_checkpoint_path = resolve_model_path(self.models_dir, self.config.model_download_specs, "dev_checkpoint")
+        distilled_lora_path = resolve_model_path(self.models_dir, self.config.model_download_specs, "distilled_lora_384")
+
+        if not dev_checkpoint_path.exists():
+            raise RuntimeError(
+                "Pro model not downloaded. Local Pro generation requires the full "
+                "LTX-2.3 dev model (ltx-2.3-22b-dev). Download it from the Model Status menu."
+            )
+        if not distilled_lora_path.exists():
+            raise RuntimeError(
+                "Pro model LoRA not downloaded. Local Pro generation requires the "
+                "distilled LoRA-384 (ltx-2.3-22b-distilled-lora-384). Download it from the Model Status menu."
+            )
+
+        use_upscaler = self.state.app_settings.pro_model.use_upscaler
+        pipeline = self._pro_video_pipeline_class.create(
+            str(dev_checkpoint_path),
+            gemma_root,
+            upsampler_path,
+            str(distilled_lora_path),
+            use_upscaler,
             self.config.device,
         )
 
@@ -142,6 +185,28 @@ class PipelinesHandler(StateHandlerBase):
             self.state.gpu_slot = None
             self._assert_invariants()
         self._gpu_cleaner.cleanup()
+
+    def invalidate_video_pipeline_for_compile_change(self) -> bool:
+        """Drop the active video pipeline when its compiled state no longer matches
+        the ``use_torch_compile`` setting, so the next load reapplies it.
+
+        Returns ``True`` when a pipeline was dropped. No-op (returns ``False``) when
+        no video pipeline is active, a generation is running, or the compiled state
+        already matches the current setting.
+        """
+        with self._lock:
+            match self.state.gpu_slot:
+                case GpuSlot(active_pipeline=VideoPipelineState(), generation=GenerationRunning()):
+                    return False
+                case GpuSlot(active_pipeline=VideoPipelineState(is_compiled=is_compiled)):
+                    if is_compiled == self.state.app_settings.use_torch_compile:
+                        return False
+                    self.state.gpu_slot = None
+                    self._assert_invariants()
+                case _:
+                    return False
+        self._gpu_cleaner.cleanup()
+        return True
 
     def park_zit_on_cpu(self) -> None:
         zit: ImageGenerationPipeline | None = None

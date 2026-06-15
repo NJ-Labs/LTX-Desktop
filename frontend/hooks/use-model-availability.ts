@@ -24,6 +24,7 @@ interface ModelStatusItem {
   description: string
   downloaded: boolean
   required: boolean
+  in_inventory?: boolean
   relative_path?: string
   resolved_path?: string
 }
@@ -50,6 +51,13 @@ export interface ModelAvailabilityState {
     relativePath: string
     resolvedPath: string
   }>
+  additionalModels: Array<{
+    id: string
+    name: string
+    downloaded: boolean
+    relativePath: string
+    resolvedPath: string
+  }>
   startupStatus: StartupProbeStatus
   startupMessage: string | null
   modelsLoaded: boolean
@@ -66,6 +74,7 @@ const DEFAULT_STATE: ModelAvailabilityState = {
   requiredDownloaded: 0,
   missingRequired: [],
   requiredModels: [],
+  additionalModels: [],
   startupStatus: 'unknown',
   startupMessage: null,
   modelsLoaded: false,
@@ -87,6 +96,15 @@ function deriveAvailability(
     relativePath: model.relative_path ?? '',
     resolvedPath: model.resolved_path ?? '',
   }))
+  const additionalModelEntries = (modelsStatus.models ?? [])
+    .filter((model) => model.in_inventory === true && !model.required)
+    .map((model) => ({
+      id: model.id,
+      name: model.name,
+      downloaded: model.downloaded,
+      relativePath: model.relative_path ?? '',
+      resolvedPath: model.resolved_path ?? '',
+    }))
   const startupStatus = readyProbe.status ?? 'unknown'
   const startupMessage = readyProbe.error ?? readyProbe.message ?? readyProbe.current_step ?? null
   const modelsLoaded = health.models_loaded === true
@@ -138,6 +156,7 @@ function deriveAvailability(
     requiredDownloaded,
     missingRequired,
     requiredModels: requiredModelEntries,
+    additionalModels: additionalModelEntries,
     startupStatus,
     startupMessage,
     modelsLoaded,

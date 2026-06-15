@@ -26,9 +26,13 @@ ENV PYTHONUNBUFFERED=1 \
     UV_CACHE_DIR=/root/.cache/uv \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
+    UV_NATIVE_TLS=1 \
+    UV_INSECURE_HOST="download.pytorch.org download-r2.pytorch.org pypi.org files.pythonhosted.org" \
+    CC=gcc \
     PATH="/app/backend/.venv/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     ca-certificates \
     curl \
     ffmpeg \

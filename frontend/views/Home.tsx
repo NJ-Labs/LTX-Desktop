@@ -1,9 +1,12 @@
 import { useState } from 'react'
-import { Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles } from 'lucide-react'
+import { Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap, Loader2 } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
+import { PlaygroundGallery } from '../components/PlaygroundGallery'
+import { ProjectDetailsModal } from '../components/ProjectDetailsModal'
+import { usePreloadModels } from '../hooks/use-preload-models'
 import { Button } from '../components/ui/button'
-import type { Project } from '../types/project'
+import type { Project, ProjectDetails } from '../types/project'
 
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp)
@@ -16,19 +19,18 @@ function formatDate(timestamp: number): string {
   })
 }
 
-function ProjectCard({ project, onOpen, onDelete, onRename }: {
+function ProjectCard({ project, onOpen, onDelete, onEdit }: {
   project: Project
   onOpen: () => void
   onDelete: () => void
-  onRename: () => void
+  onEdit: () => void
 }) {
   const [showMenu, setShowMenu] = useState(false)
   const [imgError, setImgError] = useState(false)
   
-  // Get thumbnail: use stored thumbnail, or first asset's URL as fallback
-  const thumbnailUrl = project.thumbnail || (project.assets.length > 0 ? project.assets[0].url : null)
-  // For videos, try to find the first image asset for a better thumbnail
-  const bestThumbnail = project.assets.find(a => a.type === 'image')?.url || thumbnailUrl
+  // Cover image takes precedence, then a stored thumbnail / first image asset.
+  const fallbackThumbnail = project.thumbnail || (project.assets.length > 0 ? project.assets[0].url : null)
+  const bestThumbnail = project.coverImage || project.assets.find(a => a.type === 'image')?.url || fallbackThumbnail
   
   return (
     <div 
@@ -85,11 +87,11 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            onClick={() => { onRename(); setShowMenu(false) }}
+            onClick={() => { onEdit(); setShowMenu(false) }}
             className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
           >
             <Pencil className="h-4 w-4" />
-            Rename
+            Edit
           </button>
           <button
             onClick={() => { onDelete(); setShowMenu(false) }}
@@ -105,32 +107,22 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
 }
 
 export function Home() {
-  const { projects, createProject, deleteProject, renameProject, openProject, openPlayground } = useProjects()
+  const { projects, createProject, deleteProject, updateProject, openProject, openPlayground } = useProjects()
+  const { preload, isPreloading } = usePreloadModels()
   const [isCreating, setIsCreating] = useState(false)
-  const [newProjectName, setNewProjectName] = useState('')
-  const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
+  const [editingProject, setEditingProject] = useState<Project | null>(null)
 
-  const handleCreateProject = () => {
-    if (newProjectName.trim()) {
-      const project = createProject(newProjectName.trim())
-      setNewProjectName('')
-      setIsCreating(false)
-      openProject(project.id)
-    }
+  const handleCreateProject = (details: ProjectDetails) => {
+    const project = createProject(details)
+    setIsCreating(false)
+    openProject(project.id)
   }
   
-  const handleRenameProject = (id: string, currentName: string) => {
-    setRenamingId(id)
-    setRenameValue(currentName)
-  }
-  
-  const submitRename = () => {
-    if (renamingId && renameValue.trim()) {
-      renameProject(renamingId, renameValue.trim())
+  const handleSaveEdit = (details: ProjectDetails) => {
+    if (editingProject) {
+      updateProject(editingProject.id, details)
     }
-    setRenamingId(null)
-    setRenameValue('')
+    setEditingProject(null)
   }
   
   return (
@@ -157,6 +149,15 @@ export function Home() {
             >
               <Sparkles className="h-4 w-4" />
               Playground
+            </button>
+            <button
+              onClick={() => void preload()}
+              disabled={isPreloading}
+              title="Load and warm all available local models into memory"
+              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isPreloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+              {isPreloading ? 'Preloading…' : 'Preload models'}
             </button>
           </div>
           
@@ -210,111 +211,68 @@ export function Home() {
           </div>
         </div>
         
-        {/* Projects Grid */}
-        <div className="p-8">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-semibold text-white">Projects</h2>
-          </div>
-          
-          {projects.length === 0 ? (
-            <div className="text-center py-16">
-              <Folder className="h-16 w-16 text-zinc-700 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-zinc-400 mb-2">No projects yet</h3>
-              <p className="text-zinc-500 mb-6">Create your first project to get started</p>
-              <Button 
-                onClick={() => setIsCreating(true)}
-                className="bg-blue-600 hover:bg-blue-500"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Create Project
-              </Button>
+        {/* Projects + Playground */}
+        <div className="p-8 space-y-12">
+          <section>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-semibold text-white">Projects</h2>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {projects.map(project => (
-                <ProjectCard
-                  key={project.id}
-                  project={project}
-                  onOpen={() => openProject(project.id)}
-                  onDelete={() => {
-                    if (confirm(`Delete "${project.name}"?`)) {
-                      deleteProject(project.id)
-                    }
-                  }}
-                  onRename={() => handleRenameProject(project.id, project.name)}
-                />
-              ))}
-            </div>
-          )}
+            
+            {projects.length === 0 ? (
+              <div className="text-center py-16">
+                <Folder className="h-16 w-16 text-zinc-700 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-zinc-400 mb-2">No projects yet</h3>
+                <p className="text-zinc-500 mb-6">Create your first project to get started</p>
+                <Button 
+                  onClick={() => setIsCreating(true)}
+                  className="bg-blue-600 hover:bg-blue-500"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Project
+                </Button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {projects.map(project => (
+                  <ProjectCard
+                    key={project.id}
+                    project={project}
+                    onOpen={() => openProject(project.id)}
+                    onDelete={() => {
+                      if (confirm(`Delete "${project.name}"?`)) {
+                        deleteProject(project.id)
+                      }
+                    }}
+                    onEdit={() => setEditingProject(project)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+
+          <PlaygroundGallery />
         </div>
       </main>
       
       {/* Create Project Modal */}
       {isCreating && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-          <div className="bg-zinc-900 rounded-xl p-6 w-full max-w-md border border-zinc-800">
-            <h2 className="text-xl font-semibold text-white mb-4">Create New Project</h2>
-            <input
-              type="text"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="Project name"
-              className="w-full px-4 py-3 rounded-lg bg-zinc-800 border border-zinc-700 text-white placeholder:text-zinc-500 focus:outline-none focus:border-blue-500"
-              autoFocus
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
-            />
-            <div className="flex gap-3 mt-6">
-              <Button
-                variant="outline"
-                onClick={() => { setIsCreating(false); setNewProjectName('') }}
-                className="flex-1 border-zinc-700"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleCreateProject}
-                disabled={!newProjectName.trim()}
-                className="flex-1 bg-blue-600 hover:bg-blue-500"
-              >
-                Create
-              </Button>
-            </div>
-          </div>
-        </div>
+        <ProjectDetailsModal
+          mode="create"
+          onClose={() => setIsCreating(false)}
+          onSubmit={handleCreateProject}
+        />
       )}
       
-      {/* Rename Modal */}
-      {renamingId && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-          <div className="bg-zinc-900 rounded-xl p-6 w-full max-w-md border border-zinc-800">
-            <h2 className="text-xl font-semibold text-white mb-4">Rename Project</h2>
-            <input
-              type="text"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              placeholder="Project name"
-              className="w-full px-4 py-3 rounded-lg bg-zinc-800 border border-zinc-700 text-white placeholder:text-zinc-500 focus:outline-none focus:border-blue-500"
-              autoFocus
-              onKeyDown={(e) => e.key === 'Enter' && submitRename()}
-            />
-            <div className="flex gap-3 mt-6">
-              <Button
-                variant="outline"
-                onClick={() => { setRenamingId(null); setRenameValue('') }}
-                className="flex-1 border-zinc-700"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={submitRename}
-                disabled={!renameValue.trim()}
-                className="flex-1 bg-blue-600 hover:bg-blue-500"
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        </div>
+      {/* Edit Project Modal */}
+      {editingProject && (
+        <ProjectDetailsModal
+          mode="edit"
+          initialName={editingProject.name}
+          initialDescription={editingProject.description}
+          initialCoverImage={editingProject.coverImage}
+          onClose={() => setEditingProject(null)}
+          onSubmit={handleSaveEdit}
+        />
       )}
 
     </div>

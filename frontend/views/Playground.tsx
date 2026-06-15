@@ -15,12 +15,16 @@ import { useGeneration } from '../hooks/use-generation'
 import { useRetake } from '../hooks/use-retake'
 import { useIcLora } from '../hooks/use-ic-lora'
 import { useBackend } from '../hooks/use-backend'
-import { useProjects } from '../contexts/ProjectContext'
+import { useProjects, PLAYGROUND_ASSET_FOLDER } from '../contexts/ProjectContext'
 import { useAppSettings } from '../contexts/AppSettingsContext'
 import { fileUrlToPath } from '../lib/url-to-path'
+import { copyToAssetFolder } from '../lib/asset-copy'
 import { sanitizeForcedApiVideoSettings } from '../lib/api-video-options'
 import { RetakePanel } from '../components/RetakePanel'
 import { ICLoraPanel, CONDITIONING_TYPES, type ICLoraConditioningType } from '../components/ICLoraPanel'
+import { Tooltip } from '../components/ui/tooltip'
+import { EnhanceIcon } from '../components/EnhanceIcon'
+import { usePromptEnhancer } from '../hooks/use-prompt-enhancer'
 
 const DEFAULT_SETTINGS: GenerationSettings = {
   model: 'fast',
@@ -37,7 +41,7 @@ const DEFAULT_SETTINGS: GenerationSettings = {
 }
 
 export function Playground() {
-  const { goHome } = useProjects()
+  const { goHome, addPlaygroundAsset } = useProjects()
   const { forceApiGenerations, shouldVideoGenerateWithLtxApi } = useAppSettings()
   const [mode, setMode] = useState<GenerationMode>('text-to-video')
   const [prompt, setPrompt] = useState('')
@@ -89,6 +93,22 @@ export function Playground() {
   } = useGeneration()
 
   const {
+    isConfigured: promptEnhancerConfigured,
+    isEnhancing: isEnhancingPrompt,
+    enhancePrompt,
+  } = usePromptEnhancer()
+
+  const handleEnhancePrompt = async () => {
+    if (!promptEnhancerConfigured) {
+      window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'promptEnhancer' } }))
+      return
+    }
+    if (!prompt.trim() || isEnhancingPrompt) return
+    const enhanced = await enhancePrompt(prompt, mode === 'text-to-image' ? 'image' : 'video')
+    if (enhanced) setPrompt(enhanced)
+  }
+
+  const {
     submitRetake,
     resetRetake,
     isRetaking,
@@ -129,9 +149,28 @@ export function Playground() {
   // Ref to store generated image URL for "Create video" flow
   const generatedImageRef = useRef<string | null>(null)
 
+  // Persist completed Playground generations to the global Playground gallery (Home)
+  const [lastPrompt, setLastPrompt] = useState('')
+  const persistedVideoKeyRef = useRef<string | null>(null)
+  const persistedRetakeKeyRef = useRef<string | null>(null)
+  const persistedIcLoraKeyRef = useRef<string | null>(null)
+  const videoSubmissionRef = useRef<{
+    mode: 'text-to-video' | 'image-to-video' | 'audio-to-video'
+    settings: GenerationSettings
+    inputImageUrl?: string
+    inputAudioUrl?: string
+  } | null>(null)
+  const retakeSubmissionRef = useRef<{ prompt: string; startTime: number; duration: number } | null>(null)
+  const icLoraSubmissionRef = useRef<{ prompt: string; conditioningType: ICLoraConditioningType; conditioningStrength: number } | null>(null)
+
   const handleGenerate = () => {
     if (mode === 'ic-lora') {
       if (!icLoraInput.videoPath || !icLoraInput.ready || !prompt.trim()) return
+      icLoraSubmissionRef.current = {
+        prompt,
+        conditioningType: icLoraCondType,
+        conditioningStrength: icLoraStrength,
+      }
       submitIcLora({
         videoPath: icLoraInput.videoPath,
         conditioningType: icLoraCondType,
@@ -143,6 +182,11 @@ export function Playground() {
 
     if (mode === 'retake') {
       if (!retakeInput.videoPath || retakeInput.duration < 2) return
+      retakeSubmissionRef.current = {
+        prompt,
+        startTime: retakeInput.startTime,
+        duration: retakeInput.duration,
+      }
       submitRetake({
         videoPath: retakeInput.videoPath,
         startTime: retakeInput.startTime,
@@ -166,6 +210,13 @@ export function Playground() {
       const imagePath = selectedImage ? fileUrlToPath(selectedImage) : null
       const audioPath = selectedAudio ? fileUrlToPath(selectedAudio) : null
       if (audioPath) effectiveVideoSettings.model = 'pro'
+      setLastPrompt(prompt)
+      videoSubmissionRef.current = {
+        mode: audioPath ? 'audio-to-video' : imagePath ? 'image-to-video' : 'text-to-video',
+        settings: effectiveVideoSettings,
+        inputImageUrl: selectedImage || undefined,
+        inputAudioUrl: selectedAudio || undefined,
+      }
       generate(prompt, imagePath, effectiveVideoSettings, audioPath)
     }
   }
@@ -214,6 +265,138 @@ export function Playground() {
     resetIcLora()
     reset()
   }
+
+  // Persist completed video generations (T2V/I2V/A2V) to the Playground gallery
+  useEffect(() => {
+    if (!videoUrl || !videoPath || isGenerating) return
+    const submission = videoSubmissionRef.current
+    if (!submission) return
+    const key = `${videoUrl}|${videoPath}`
+    if (persistedVideoKeyRef.current === key) return
+    persistedVideoKeyRef.current = key
+    const promptUsed = lastPrompt
+    const s = submission.settings
+    void (async () => {
+      try {
+        const copied = await copyToAssetFolder(videoPath, PLAYGROUND_ASSET_FOLDER)
+        const finalPath = copied?.path ?? videoPath
+        const finalUrl = copied?.url ?? videoUrl
+        addPlaygroundAsset({
+          type: 'video',
+          path: finalPath,
+          url: finalUrl,
+          prompt: promptUsed,
+          resolution: s.videoResolution,
+          duration: s.duration,
+          generationParams: {
+            mode: submission.mode,
+            prompt: promptUsed,
+            model: s.model,
+            duration: s.duration,
+            resolution: s.videoResolution,
+            fps: s.fps,
+            audio: s.audio || false,
+            cameraMotion: 'none',
+            imageAspectRatio: s.aspectRatio,
+            imageSteps: 4,
+            inputImageUrl: submission.inputImageUrl,
+            inputAudioUrl: submission.inputAudioUrl,
+          },
+          takes: [{ url: finalUrl, path: finalPath, createdAt: Date.now() }],
+          activeTakeIndex: 0,
+        })
+      } catch (err) {
+        persistedVideoKeyRef.current = null
+        logger.error(`Failed to persist Playground video: ${err}`)
+      }
+    })()
+  }, [videoUrl, videoPath, isGenerating, lastPrompt, addPlaygroundAsset])
+
+  // Persist completed Retake generations to the Playground gallery
+  useEffect(() => {
+    if (!retakeResult || isRetaking) return
+    const key = `${retakeResult.videoUrl}|${retakeResult.videoPath}`
+    if (persistedRetakeKeyRef.current === key) return
+    persistedRetakeKeyRef.current = key
+    const submission = retakeSubmissionRef.current
+    const resultVideoPath = retakeResult.videoPath
+    const resultVideoUrl = retakeResult.videoUrl
+    void (async () => {
+      try {
+        const copied = await copyToAssetFolder(resultVideoPath, PLAYGROUND_ASSET_FOLDER)
+        const finalPath = copied?.path ?? resultVideoPath
+        const finalUrl = copied?.url ?? resultVideoUrl
+        addPlaygroundAsset({
+          type: 'video',
+          path: finalPath,
+          url: finalUrl,
+          prompt: submission?.prompt ?? '',
+          resolution: '',
+          duration: submission?.duration,
+          generationParams: {
+            mode: 'retake',
+            prompt: submission?.prompt ?? '',
+            model: 'pro',
+            duration: submission?.duration ?? 0,
+            resolution: '',
+            fps: 24,
+            audio: true,
+            cameraMotion: 'none',
+            retakeStartTime: submission?.startTime,
+            retakeDuration: submission?.duration,
+            retakeMode: 'replace_audio_and_video',
+          },
+          takes: [{ url: finalUrl, path: finalPath, createdAt: Date.now() }],
+          activeTakeIndex: 0,
+        })
+      } catch (err) {
+        persistedRetakeKeyRef.current = null
+        logger.error(`Failed to persist Playground retake video: ${err}`)
+      }
+    })()
+  }, [retakeResult, isRetaking, addPlaygroundAsset])
+
+  // Persist completed IC-LoRA generations to the Playground gallery
+  useEffect(() => {
+    if (!icLoraResult || isIcLoraGenerating) return
+    const key = `${icLoraResult.videoUrl}|${icLoraResult.videoPath}`
+    if (persistedIcLoraKeyRef.current === key) return
+    persistedIcLoraKeyRef.current = key
+    const submission = icLoraSubmissionRef.current
+    const resultVideoPath = icLoraResult.videoPath
+    const resultVideoUrl = icLoraResult.videoUrl
+    void (async () => {
+      try {
+        const copied = await copyToAssetFolder(resultVideoPath, PLAYGROUND_ASSET_FOLDER)
+        const finalPath = copied?.path ?? resultVideoPath
+        const finalUrl = copied?.url ?? resultVideoUrl
+        addPlaygroundAsset({
+          type: 'video',
+          path: finalPath,
+          url: finalUrl,
+          prompt: submission?.prompt ?? '',
+          resolution: '',
+          generationParams: {
+            mode: 'ic-lora',
+            prompt: submission?.prompt ?? '',
+            model: 'pro',
+            duration: 0,
+            resolution: '',
+            fps: 24,
+            audio: false,
+            cameraMotion: 'none',
+            icLoraConditioningType: submission?.conditioningType,
+            icLoraConditioningStrength: submission?.conditioningStrength,
+          },
+          takes: [{ url: finalUrl, path: finalPath, createdAt: Date.now() }],
+          activeTakeIndex: 0,
+        })
+      } catch (err) {
+        persistedIcLoraKeyRef.current = null
+        logger.error(`Failed to persist Playground IC-LoRA video: ${err}`)
+      }
+    })()
+  }, [icLoraResult, isIcLoraGenerating, addPlaygroundAsset])
 
   const isRetakeMode = mode === 'retake'
   const isIcLoraMode = mode === 'ic-lora'
@@ -343,16 +526,38 @@ export function Playground() {
             )}
 
             {/* Prompt Input */}
-            <Textarea
-              label="Prompt"
-              placeholder="Write a prompt..."
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              helperText="Longer, detailed prompts lead to better, more accurate results."
-              charCount={prompt.length}
-              maxChars={5000}
-              disabled={isBusy}
-            />
+            <div className="relative">
+              <Textarea
+                label="Prompt"
+                placeholder="Write a prompt..."
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                helperText="Longer, detailed prompts lead to better, more accurate results."
+                charCount={prompt.length}
+                maxChars={5000}
+                disabled={isBusy}
+              />
+              {(mode === 'text-to-video' || mode === 'image-to-video' || mode === 'text-to-image') && (
+                <div className="absolute top-0 right-0">
+                  <Tooltip content={promptEnhancerConfigured ? 'Enhance Prompt' : 'Set up Prompt Enhancer'} side="left">
+                    <button
+                      onClick={handleEnhancePrompt}
+                      disabled={isBusy || isEnhancingPrompt || (promptEnhancerConfigured && !prompt.trim())}
+                      aria-label="Enhance Prompt"
+                      className={`flex items-center justify-center h-7 w-7 rounded-md transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                        isEnhancingPrompt ? 'cursor-wait ' : ''
+                      }${
+                        promptEnhancerConfigured
+                          ? 'text-blue-300 hover:text-white hover:bg-zinc-700'
+                          : 'text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800'
+                      }`}
+                    >
+                      <EnhanceIcon className={`h-4 w-4 ${isEnhancingPrompt ? 'animate-pulse' : ''}`} />
+                    </button>
+                  </Tooltip>
+                </div>
+              )}
+            </div>
 
             {/* Settings */}
             {!isRetakeMode && !isIcLoraMode && (

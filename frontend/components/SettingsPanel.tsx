@@ -6,6 +6,8 @@ import {
   getAllowedForcedApiDurations,
   sanitizeForcedApiVideoSettings,
 } from '../lib/api-video-options'
+import { clampLocalDuration, getLocalDurationOptions, LOCAL_RESOLUTIONS, LOCAL_VIDEO_FPS } from '../lib/local-video-options'
+import { useAppSettings } from '../contexts/AppSettingsContext'
 
 export interface GenerationSettings {
   model: 'fast' | 'pro'
@@ -40,7 +42,11 @@ export function SettingsPanel({
   hasAudio = false,
 }: SettingsPanelProps) {
   const isImageMode = mode === 'text-to-image'
-  const LOCAL_MAX_DURATION: Record<string, number> = { '540p': 20, '720p': 10, '1080p': 5 }
+  const { settings: appSettings } = useAppSettings()
+  const localCapConfig = {
+    enabled: appSettings.localDurationCapEnabled,
+    caps: appSettings.localDurationCaps,
+  }
 
   const handleChange = (key: keyof GenerationSettings, value: string | number | boolean) => {
     const nextSettings = { ...settings, [key]: value } as GenerationSettings
@@ -49,25 +55,26 @@ export function SettingsPanel({
       return
     }
 
-    // Clamp duration when resolution changes for local generation
-    if (key === 'videoResolution' && !forceApiGenerations) {
-      const maxDur = LOCAL_MAX_DURATION[value as string] ?? 20
-      if (nextSettings.duration > maxDur) {
-        nextSettings.duration = maxDur
-      }
+    // Re-clamp local duration when resolution or fps changes (cap is fps-aware).
+    if ((key === 'videoResolution' || key === 'fps') && !forceApiGenerations) {
+      nextSettings.duration = clampLocalDuration(
+        nextSettings.duration,
+        nextSettings.videoResolution,
+        nextSettings.fps,
+        localCapConfig,
+      )
     }
 
     onSettingsChange(nextSettings)
   }
 
-  const localMaxDuration = LOCAL_MAX_DURATION[settings.videoResolution] ?? 20
   const durationOptions = forceApiGenerations
     ? [...getAllowedForcedApiDurations(settings.model, settings.videoResolution, settings.fps)]
-    : [5, 6, 8, 10, 20].filter(d => d <= localMaxDuration)
+    : getLocalDurationOptions(settings.videoResolution, settings.fps, localCapConfig)
   const resolutionOptions = forceApiGenerations
     ? (hasAudio ? ['1080p'] : [...FORCED_API_VIDEO_RESOLUTIONS])
-    : ['1080p', '720p', '540p']
-  const fpsOptions = forceApiGenerations ? [...FORCED_API_VIDEO_FPS] : [24, 25, 50]
+    : [...LOCAL_RESOLUTIONS]
+  const fpsOptions = forceApiGenerations ? [...FORCED_API_VIDEO_FPS] : [...LOCAL_VIDEO_FPS]
 
   // Image mode settings
   if (isImageMode) {

@@ -190,6 +190,28 @@ def test_startup_warmup_can_force_preload_without_saved_setting(test_state, fake
     assert isinstance(test_state.state.cpu_slot, CpuSlot)
 
 
+def test_manual_preload_forces_warmup_without_saved_setting(test_state, fake_services, create_fake_model_files):
+    create_fake_model_files(include_zit=True)
+    test_state.config.startup_preload_models = False
+    test_state.state.app_settings.load_on_startup = False
+
+    started = test_state.health.start_manual_preload()
+
+    assert started is True
+    assert isinstance(test_state.state.startup, StartupReady)
+    assert isinstance(test_state.state.gpu_slot, GpuSlot)
+    assert isinstance(test_state.state.cpu_slot, CpuSlot)
+
+
+def test_manual_preload_rejects_when_already_loading(test_state):
+    test_state.state.startup = StartupLoading(current_step="busy", progress=10)
+
+    started = test_state.health.start_manual_preload()
+
+    assert started is False
+    assert isinstance(test_state.state.startup, StartupLoading)
+
+
 def test_forced_mode_warmup_skips_fast_pipeline(test_state):
     test_state.config.force_api_generations = True
     test_state.config.required_model_types = frozenset()
@@ -257,3 +279,77 @@ def test_ic_lora_unload_clears_preprocessing_resources(test_state):
     test_state.pipelines.unload_gpu_pipeline()
 
     assert test_state.state.gpu_slot is None
+
+
+def test_enabling_torch_compile_drops_uncompiled_pipeline(test_state, create_fake_model_files):
+    create_fake_model_files()
+    test_state.pipelines.load_gpu_pipeline("fast")
+    assert isinstance(test_state.state.gpu_slot, GpuSlot)
+
+    before = test_state.state.app_settings.model_copy(deep=True)
+    test_state.state.app_settings.use_torch_compile = True
+    after = test_state.state.app_settings.model_copy(deep=True)
+
+    test_state.health.apply_runtime_settings(before, after)
+
+    # Pipeline dropped so the next load reloads it compiled (no app restart).
+    assert test_state.state.gpu_slot is None
+
+
+def test_disabling_torch_compile_drops_compiled_pipeline(test_state, create_fake_model_files):
+    create_fake_model_files()
+    test_state.state.app_settings.use_torch_compile = True
+    loaded = test_state.pipelines.load_gpu_pipeline("fast")
+    assert loaded.is_compiled is True
+
+    before = test_state.state.app_settings.model_copy(deep=True)
+    test_state.state.app_settings.use_torch_compile = False
+    after = test_state.state.app_settings.model_copy(deep=True)
+
+    test_state.health.apply_runtime_settings(before, after)
+
+    # Compiled pipeline dropped so it reloads uncompiled.
+    assert test_state.state.gpu_slot is None
+
+
+def test_enabling_torch_compile_with_preload_recompiles_and_rewarms(test_state, fake_services, create_fake_model_files):
+    create_fake_model_files(include_zit=True)
+    test_state.state.app_settings.load_on_startup = True
+    test_state.pipelines.load_gpu_pipeline("fast", should_warm=True)
+    assert fake_services.fast_video_pipeline.compile_calls == 0
+
+    before = test_state.state.app_settings.model_copy(deep=True)
+    test_state.state.app_settings.use_torch_compile = True
+    after = test_state.state.app_settings.model_copy(deep=True)
+
+    test_state.health.apply_runtime_settings(before, after)
+
+    assert isinstance(test_state.state.gpu_slot, GpuSlot)
+    active = test_state.state.gpu_slot.active_pipeline
+    assert isinstance(active, VideoPipelineState)
+    assert active.is_compiled is True
+    assert fake_services.fast_video_pipeline.compile_calls >= 1
+
+
+def test_invalidate_video_pipeline_noop_when_compiled_state_matches(test_state, create_fake_model_files):
+    create_fake_model_files()
+    test_state.pipelines.load_gpu_pipeline("fast")  # uncompiled; setting is False -> matches
+
+    dropped = test_state.pipelines.invalidate_video_pipeline_for_compile_change()
+
+    assert dropped is False
+    assert isinstance(test_state.state.gpu_slot, GpuSlot)
+
+
+def test_enabling_preload_warms_models_without_restart(test_state, create_fake_model_files):
+    create_fake_model_files(include_zit=True)
+
+    before = test_state.state.app_settings.model_copy(deep=True)
+    test_state.state.app_settings.load_on_startup = True
+    after = test_state.state.app_settings.model_copy(deep=True)
+
+    test_state.health.apply_runtime_settings(before, after)
+
+    assert isinstance(test_state.state.startup, StartupReady)
+    assert isinstance(test_state.state.gpu_slot, GpuSlot)
+    assert isinstance(test_state.state.cpu_slot, CpuSlot)

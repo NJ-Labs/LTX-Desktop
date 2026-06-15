@@ -31,6 +31,8 @@ def _build_config(tmp_path):
         required_model_types=DEFAULT_REQUIRED_MODEL_TYPES,
         outputs_dir=tmp_path / "outputs",
         settings_file=tmp_path / "settings.json",
+        library_file=tmp_path / "library.json",
+        app_data_dir=tmp_path,
         ltx_api_base_url="https://api.ltx.video",
         force_api_generations=False,
         use_sage_attention=False,

@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING
 
 from api_types import ModelFileStatus, ModelInfo, ModelsStatusResponse, TextEncoderStatus
 from handlers.base import StateHandlerBase, with_state_lock
-from runtime_config.model_download_specs import MODEL_FILE_ORDER, resolve_model_path, resolve_required_model_types
+from runtime_config.model_download_specs import (
+    INVENTORY_OPTIONAL_MODEL_TYPES,
+    MODEL_FILE_ORDER,
+    resolve_model_path,
+    resolve_required_model_types,
+)
 from state.app_state_types import AppState, AvailableFiles, ModelFileType
 
 if TYPE_CHECKING:
@@ -137,6 +142,7 @@ class ModelsHandler(StateHandlerBase):
                     relative_path=spec.relative_path.as_posix(),
                     resolved_path=str(resolved_path),
                     optional_reason=optional_reason if model_type == "text_encoder" else None,
+                    in_inventory=required or model_type in INVENTORY_OPTIONAL_MODEL_TYPES,
                 )
             )
 

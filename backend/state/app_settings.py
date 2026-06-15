@@ -27,6 +27,10 @@ def _clamp_int(value: Any, minimum: int, maximum: int, default: int) -> int:
     return max(minimum, min(maximum, parsed))
 
 
+def _default_local_duration_caps() -> dict[str, int]:
+    return {"540p": 20, "720p": 10, "1080p": 5, "1440p": 5, "2160p": 5}
+
+
 class SettingsBaseModel(BaseModel):
     model_config = ConfigDict(
         alias_generator=_to_camel_case,
@@ -72,9 +76,14 @@ class AppSettings(SettingsBaseModel):
     prompt_enhancer_enabled_t2v: bool = True
     prompt_enhancer_enabled_i2v: bool = False
     gemini_api_key: str = ""
+    prompt_enhancer_base_url: str = ""
+    prompt_enhancer_api_key: str = ""
+    prompt_enhancer_model: str = ""
     seed_locked: bool = False
     locked_seed: int = 42
     models_dir: str = ""
+    local_duration_cap_enabled: bool = True
+    local_duration_caps: dict[str, int] = Field(default_factory=_default_local_duration_caps)
 
     @field_validator("prompt_cache_size", mode="before")
     @classmethod
@@ -85,6 +94,19 @@ class AppSettings(SettingsBaseModel):
     @classmethod
     def _clamp_locked_seed(cls, value: Any) -> int:
         return _clamp_int(value, minimum=0, maximum=2_147_483_647, default=42)
+
+    @field_validator("local_duration_caps", mode="before")
+    @classmethod
+    def _clamp_local_duration_caps(cls, value: Any) -> dict[str, int]:
+        defaults = _default_local_duration_caps()
+        if not isinstance(value, dict):
+            return defaults
+        result = dict(defaults)
+        raw = cast(dict[Any, Any], value)
+        for key, cap in raw.items():
+            if isinstance(key, str) and key in defaults:
+                result[key] = _clamp_int(cap, minimum=1, maximum=600, default=defaults[key])
+        return result
 
 
 SettingsModelT = TypeVar("SettingsModelT", bound=SettingsBaseModel)
@@ -144,9 +166,14 @@ class SettingsResponse(SettingsBaseModel):
     prompt_enhancer_enabled_t2v: bool = True
     prompt_enhancer_enabled_i2v: bool = False
     has_gemini_api_key: bool = False
+    prompt_enhancer_base_url: str = ""
+    prompt_enhancer_model: str = ""
+    has_prompt_enhancer_api_key: bool = False
     seed_locked: bool = False
     locked_seed: int = 42
     models_dir: str = ""
+    local_duration_cap_enabled: bool = True
+    local_duration_caps: dict[str, int] = Field(default_factory=_default_local_duration_caps)
 
 
 def to_settings_response(settings: AppSettings) -> SettingsResponse:
@@ -154,10 +181,12 @@ def to_settings_response(settings: AppSettings) -> SettingsResponse:
     ltx_key = data.pop("ltx_api_key", "")
     fal_key = data.pop("fal_api_key", "")
     gemini_key = data.pop("gemini_api_key", "")
+    prompt_enhancer_key = data.pop("prompt_enhancer_api_key", "")
     data["has_ltx_api_key"] = bool(ltx_key)
     data["has_fal_api_key"] = bool(fal_key)
     data["has_gemini_api_key"] = bool(gemini_key)
-    # models_dir passes through as-is (not secret)
+    data["has_prompt_enhancer_api_key"] = bool(prompt_enhancer_key)
+    # models_dir and prompt_enhancer_base_url/model pass through as-is (not secret)
     return SettingsResponse.model_validate(data)
 
 

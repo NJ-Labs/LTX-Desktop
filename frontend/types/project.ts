@@ -404,12 +404,21 @@ export interface Timeline {
 export interface Project {
   id: string
   name: string
+  description?: string
+  coverImage?: string
   createdAt: number
   updatedAt: number
   assets: Asset[]
   thumbnail?: string
   timelines: Timeline[]
   activeTimelineId?: string
+}
+
+// Editable project details (used by create + edit flows)
+export interface ProjectDetails {
+  name: string
+  description?: string
+  coverImage?: string
 }
 
 export type ViewType = 'home' | 'project' | 'playground'

@@ -11,7 +11,8 @@ from handlers.models_handler import ModelsHandler
 from runtime_config.model_download_specs import resolve_model_path
 from handlers.pipelines_handler import PipelinesHandler
 from logging_policy import log_background_exception
-from services.interfaces import GpuInfo
+from services.interfaces import GpuInfo, TaskRunner
+from state.app_settings import AppSettings
 from state.app_state_types import AppState, GpuSlot, StartupError, StartupLoading, StartupPending, StartupReady, VideoPipelineState, VideoPipelineWarmth
 
 if TYPE_CHECKING:
@@ -26,12 +27,14 @@ class HealthHandler(StateHandlerBase):
         models_handler: ModelsHandler,
         pipelines_handler: PipelinesHandler,
         gpu_info: GpuInfo,
+        task_runner: TaskRunner,
         config: RuntimeConfig,
     ) -> None:
         super().__init__(state, lock, config)
         self._models = models_handler
         self._pipelines = pipelines_handler
         self._gpu_info = gpu_info
+        self._task_runner = task_runner
 
     def get_health(self) -> HealthResponse:
         active_model: str | None = None
@@ -109,7 +112,7 @@ class HealthHandler(StateHandlerBase):
 
         return False, {"status": "unknown"}
 
-    def default_warmup(self) -> None:
+    def default_warmup(self, force_preload: bool = False) -> None:
         try:
             if self.config.require_local_mode and self.config.force_api_generations:
                 raise RuntimeError(
@@ -128,7 +131,11 @@ class HealthHandler(StateHandlerBase):
                 self.set_startup_pending("Models not downloaded. User needs to download via app.")
                 return
 
-            should_preload = self.config.startup_preload_models or self.state.app_settings.load_on_startup
+            should_preload = (
+                force_preload
+                or self.config.startup_preload_models
+                or self.state.app_settings.load_on_startup
+            )
             if not should_preload:
                 self.set_startup_ready()
                 return
@@ -160,3 +167,39 @@ class HealthHandler(StateHandlerBase):
         except Exception as exc:
             log_background_exception("health-default-warmup", exc)
             self.set_startup_error(str(exc))
+
+    def start_manual_preload(self) -> bool:
+        """Trigger a manual model preload (load + warm pipelines) in the background.
+
+        Returns ``False`` if a preload/warmup is already in progress.
+        """
+        with self._lock:
+            if isinstance(self.state.startup, StartupLoading):
+                return False
+            self.state.startup = StartupLoading(current_step="Starting preload", progress=1)
+
+        self._task_runner.run_background(
+            lambda: self.default_warmup(force_preload=True),
+            task_name="manual-preload",
+            on_error=lambda exc: self.set_startup_error(str(exc)),
+            daemon=True,
+        )
+        return True
+
+    def apply_runtime_settings(self, before: AppSettings, after: AppSettings) -> None:
+        """Apply settings that take effect at runtime without an app restart.
+
+        - ``use_torch_compile``: drop the active (mismatched) video pipeline so the
+          next load reloads it compiled/uncompiled to match the new setting.
+        - ``load_on_startup``: when models should stay preloaded, (re)warm them in
+          the background.
+        """
+        torch_compile_changed = before.use_torch_compile != after.use_torch_compile
+        preload_newly_enabled = after.load_on_startup and not before.load_on_startup
+
+        dropped = False
+        if torch_compile_changed:
+            dropped = self._pipelines.invalidate_video_pipeline_for_compile_change()
+
+        if preload_newly_enabled or (dropped and after.load_on_startup):
+            self.start_manual_preload()

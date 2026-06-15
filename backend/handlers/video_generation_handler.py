@@ -26,7 +26,7 @@ from server_utils.media_validation import (
     validate_audio_file,
     validate_image_file,
 )
-from services.interfaces import LTXAPIClient
+from services.interfaces import LTXAPIClient, VideoPipelineModelType
 from state.app_state_types import AppState
 from state.app_settings import should_video_generate_with_ltx_api
 
@@ -92,12 +92,15 @@ class VideoGenerationHandler(StateHandlerBase):
         if audio_path:
             return self._generate_a2v(req, duration, fps, audio_path=audio_path)
 
-        logger.info("Resolution %s - using fast pipeline", resolution)
+        model_type: VideoPipelineModelType = "pro" if req.model == "pro" else "fast"
+        logger.info("Resolution %s - using %s pipeline", resolution, model_type)
 
         RESOLUTION_MAP_16_9: dict[str, tuple[int, int]] = {
             "540p": (960, 544),
             "720p": (1280, 704),
             "1080p": (1920, 1088),
+            "1440p": (2560, 1408),
+            "2160p": (3840, 2176),
         }
 
         def get_16_9_size(res: str) -> tuple[int, int]:
@@ -125,7 +128,7 @@ class VideoGenerationHandler(StateHandlerBase):
         seed = self._resolve_seed()
 
         try:
-            self._pipelines.load_gpu_pipeline("fast", should_warm=False)
+            self._pipelines.load_gpu_pipeline(model_type, should_warm=False)
             self._generation.start_generation(generation_id)
 
             output_path = self.generate_video(
@@ -138,6 +141,7 @@ class VideoGenerationHandler(StateHandlerBase):
                 seed=seed,
                 camera_motion=req.cameraMotion,
                 negative_prompt=req.negativePrompt,
+                model_type=model_type,
             )
 
             self._generation.complete_generation(output_path)
@@ -162,22 +166,30 @@ class VideoGenerationHandler(StateHandlerBase):
         seed: int,
         camera_motion: VideoCameraMotion,
         negative_prompt: str,
+        model_type: VideoPipelineModelType = "fast",
     ) -> str:
         t_total_start = time.perf_counter()
         gen_mode = "i2v" if image is not None else "t2v"
-        logger.info("[%s] Generation started (model=fast, %dx%d, %d frames, %d fps)", gen_mode, width, height, num_frames, int(fps))
+        logger.info("[%s] Generation started (model=%s, %dx%d, %d frames, %d fps)", gen_mode, model_type, width, height, num_frames, int(fps))
 
         if self._generation.is_generation_cancelled():
             raise RuntimeError("Generation was cancelled")
 
-        if not resolve_model_path(self.models_dir, self.config.model_download_specs,"checkpoint").exists():
-            raise RuntimeError("Models not downloaded. Please download the AI models first using the Model Status menu.")
-
-        total_steps = 8
+        if model_type == "pro":
+            if not resolve_model_path(self.models_dir, self.config.model_download_specs, "dev_checkpoint").exists():
+                raise RuntimeError("Models not downloaded. Please download the AI models first using the Model Status menu.")
+            pro_inference_steps = self.state.app_settings.pro_model.steps
+            total_steps = max(1, pro_inference_steps)
+        else:
+            if not resolve_model_path(self.models_dir, self.config.model_download_specs, "checkpoint").exists():
+                raise RuntimeError("Models not downloaded. Please download the AI models first using the Model Status menu.")
+            pro_inference_steps = 0
+            from services.fast_video_pipeline.ltx_fast_video_pipeline import total_denoising_steps
+            total_steps = total_denoising_steps()
 
         self._generation.update_progress("loading_model", 5, 0, total_steps)
         t_load_start = time.perf_counter()
-        pipeline_state = self._pipelines.load_gpu_pipeline("fast", should_warm=False)
+        pipeline_state = self._pipelines.load_gpu_pipeline(model_type, should_warm=False)
         t_load_end = time.perf_counter()
         logger.info("[%s] Pipeline load: %.2fs", gen_mode, t_load_end - t_load_start)
 
@@ -213,6 +225,13 @@ class VideoGenerationHandler(StateHandlerBase):
             height = round(height / 64) * 64
             width = round(width / 64) * 64
 
+            def _on_denoising_step(current_step: int, denoising_total: int) -> None:
+                pct = 15 + int(75 * current_step / denoising_total)
+                if current_step >= denoising_total:
+                    self._generation.update_progress("decoding", pct, None, None)
+                else:
+                    self._generation.update_progress("inference", pct, current_step, denoising_total)
+
             t_inference_start = time.perf_counter()
             pipeline_state.pipeline.generate(
                 prompt=enhanced_prompt,
@@ -223,6 +242,9 @@ class VideoGenerationHandler(StateHandlerBase):
                 frame_rate=fps,
                 images=images,
                 output_path=str(output_path),
+                progress_callback=_on_denoising_step,
+                num_inference_steps=pro_inference_steps,
+                negative_prompt=negative_prompt or self.config.default_negative_prompt,
             )
             t_inference_end = time.perf_counter()
             logger.info("[%s] Inference: %.2fs", gen_mode, t_inference_end - t_inference_start)
@@ -256,6 +278,8 @@ class VideoGenerationHandler(StateHandlerBase):
             "540p": (960, 576),
             "720p": (1280, 704),
             "1080p": (1920, 1088),
+            "1440p": (2560, 1408),
+            "2160p": (3840, 2176),
         }
         width, height = RESOLUTION_MAP.get(req.resolution, (960, 576))
 

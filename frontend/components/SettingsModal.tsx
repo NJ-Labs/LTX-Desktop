@@ -1,9 +1,11 @@
-import { AlertCircle, Check, Download, Film, Folder, Info, KeyRound, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
+import { AlertCircle, Check, Clock, Download, Film, Folder, Info, KeyRound, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
 import { useAppSettings, type AppSettings } from '../contexts/AppSettingsContext'
 import { backendFetch } from '../lib/backend'
 import { logger } from '../lib/logger'
+import { isWebMode } from '../lib/web-mode'
+import { LOCAL_REFERENCE_FPS, LOCAL_RESOLUTIONS } from '../lib/local-video-options'
 import { ApiKeyHelperRow, LtxApiKeyInput, LtxApiKeyHelperRow } from './LtxApiKeyInput'
 
 interface TextEncoderStatus {
@@ -21,7 +23,7 @@ interface SettingsModalProps {
 type TabId = 'general' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, forceApiGenerations, offlineMode } = useAppSettings()
+  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, forceApiGenerations, offlineMode, serverDataDir } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [ltxApiKeyInput, setLtxApiKeyInput] = useState('')
@@ -80,10 +82,16 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     window.electronAPI.getAnalyticsState()
       .then((state: { analyticsEnabled: boolean }) => setAnalyticsEnabled(state.analyticsEnabled))
       .catch(() => {})
-    window.electronAPI.getProjectAssetsPath()
-      .then((p: string) => setProjectAssetsPath(p))
-      .catch(() => {})
-  }, [isOpen])
+    // In web/self-hosted mode the storage location is fixed by the server's
+    // --data-dir flag (surfaced via runtime policy); desktop reads it via IPC.
+    if (isWebMode()) {
+      setProjectAssetsPath(serverDataDir)
+    } else {
+      window.electronAPI.getProjectAssetsPath()
+        .then((p: string) => setProjectAssetsPath(p))
+        .catch(() => {})
+    }
+  }, [isOpen, serverDataDir])
 
   // Fetch text encoder status when modal opens
   useEffect(() => {
@@ -201,6 +209,22 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     onSettingsChange({
       ...settings,
       proModel: { ...settings.proModel, useUpscaler: !settings.proModel.useUpscaler },
+    })
+  }
+
+  // Local video duration cap handlers
+  const handleToggleLocalDurationCap = () => {
+    onSettingsChange({
+      ...settings,
+      localDurationCapEnabled: !settings.localDurationCapEnabled,
+    })
+  }
+
+  const handleLocalDurationCapChange = (resolution: string, rawValue: string) => {
+    const parsed = Math.max(1, Math.min(600, parseInt(rawValue) || 1))
+    onSettingsChange({
+      ...settings,
+      localDurationCaps: { ...settings.localDurationCaps, [resolution]: parsed },
     })
   }
 
@@ -339,24 +363,28 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                   <h3 className="text-sm font-semibold text-white">Project Assets Path</h3>
                 </div>
                 <p className="text-xs text-zinc-500 leading-relaxed">
-                  Where generated video and image assets are saved. Each project gets a subfolder.
+                  {isWebMode()
+                    ? 'Persistent data directory set by the server\u2019s --data-dir flag. Projects, generated videos, and images are saved here and survive restarts.'
+                    : 'Where generated video and image assets are saved. Each project gets a subfolder.'}
                 </p>
                 <div className="flex gap-2">
                   <div className="flex-1 px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm truncate select-text">
                     {projectAssetsPath || <span className="text-zinc-600">Not set</span>}
                   </div>
-                  <Button
-                    variant="outline"
-                    className="border-zinc-700 flex-shrink-0"
-                    onClick={async () => {
-                      const result = await window.electronAPI.openProjectAssetsPathChangeDialog()
-                      if (result.success && result.path) {
-                        setProjectAssetsPath(result.path)
-                      }
-                    }}
-                  >
-                    <Folder className="h-4 w-4" />
-                  </Button>
+                  {!isWebMode() && (
+                    <Button
+                      variant="outline"
+                      className="border-zinc-700 flex-shrink-0"
+                      onClick={async () => {
+                        const result = await window.electronAPI.openProjectAssetsPathChangeDialog()
+                        if (result.success && result.path) {
+                          setProjectAssetsPath(result.path)
+                        }
+                      }}
+                    >
+                      <Folder className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -565,7 +593,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       Load AI models in the background after the app starts. The video model is loaded
                       and warmed up on GPU, and the image model is preloaded into CPU RAM for faster
                       first generation. When disabled, models load on first use (faster startup, slower
-                      first generation). Requires app restart to take effect.
+                      first generation). Takes effect immediately—no app restart required.
                     </p>
                   </div>
 
@@ -612,7 +640,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     <p className="text-xs text-zinc-500 leading-relaxed">
                       Compiles the model for optimized inference. <span className="text-orange-400">Experimental:</span> First
                       generation can take 5-10+ minutes for compilation. Subsequent generations may be
-                      20-40% faster. Requires app restart to take effect.
+                      20-40% faster. Takes effect on your next generation—no app restart required.
                     </p>
                   </div>
 
@@ -1052,6 +1080,70 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                   <span className="text-blue-400 font-medium">Tip:</span> Lower steps = faster but lower quality.
                   Higher steps = better quality but slower.
                 </p>
+              </div>
+
+              {/* Local Video Duration Cap */}
+              <div className="space-y-3 pt-4 border-t border-zinc-800">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Clock className="h-4 w-4 text-sky-400" />
+                      <label className="text-sm font-medium text-white">
+                        Limit Local Video Duration
+                      </label>
+                    </div>
+                    <p className="text-xs text-zinc-500 leading-relaxed">
+                      Caps the maximum duration for on-device generation, per resolution. The cap is set
+                      in seconds at {LOCAL_REFERENCE_FPS} FPS and scales down automatically at higher FPS
+                      (total frames = duration × FPS). Turn this off to remove the cap entirely on
+                      high-VRAM GPUs.
+                    </p>
+                  </div>
+
+                  {/* Toggle Switch */}
+                  <button
+                    onClick={handleToggleLocalDurationCap}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      settings.localDurationCapEnabled ? 'bg-sky-500' : 'bg-zinc-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        settings.localDurationCapEnabled ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Per-resolution caps - only show when enabled */}
+                {settings.localDurationCapEnabled ? (
+                  <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
+                    {LOCAL_RESOLUTIONS.map((resolution) => (
+                      <div key={resolution} className="flex items-center justify-between">
+                        <div>
+                          <label className="text-sm text-white">{resolution}</label>
+                          <p className="text-xs text-zinc-500">Max seconds at {LOCAL_REFERENCE_FPS} FPS</p>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="1"
+                            max="600"
+                            value={settings.localDurationCaps?.[resolution] ?? ''}
+                            onChange={(e) => handleLocalDurationCapChange(resolution, e.target.value)}
+                            className="w-20 px-3 py-1.5 bg-zinc-700 border border-zinc-600 rounded-lg text-sm text-white text-center focus:outline-none focus:ring-2 focus:ring-sky-500"
+                          />
+                          <span className="text-xs text-zinc-500">sec</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs px-2 py-1 rounded inline-flex items-center gap-1.5 bg-sky-500/10 text-sky-400">
+                    <AlertCircle className="h-3 w-3" />
+                    No cap — durations are unlimited. Ensure your GPU has enough VRAM.
+                  </div>
+                )}
               </div>
             </>
           )}

@@ -58,6 +58,14 @@ if use_sage_attention:
 
         _SAGE_SUPPORTED_HEADDIMS = {64, 96, 128}
 
+        # SageAttention's Triton kernels are incompatible with torch.compile /
+        # inductor symbolic-shape tracing: the attention scale gets passed to the
+        # quant kernel launch as a symbolic float where an integer grid value is
+        # expected ("'float' object cannot be interpreted as an integer").
+        # Marking the patched SDPA as compiler-disabled forces a graph break so
+        # SageAttention runs eagerly (concrete ints) while the rest of the
+        # transformer still compiles.
+        @torch.compiler.disable  # type: ignore[misc]
         def patched_sdpa(
             query: torch.Tensor,
             key: torch.Tensor,
@@ -175,7 +183,13 @@ SETTINGS_DIR = APP_DATA_DIR
 SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 
-DEFAULT_APP_SETTINGS = AppSettings()
+# Persistent server-side project library (web/self-hosted deployments). Holds the
+# full project list (names, descriptions, cover images, assets, timelines) and
+# Playground assets so they survive container restarts when APP_DATA_DIR is mounted.
+LIBRARY_FILE = APP_DATA_DIR / "library.json"
+
+TORCH_COMPILE = _env_flag("LTX_TORCH_COMPILE", default=False)
+DEFAULT_APP_SETTINGS = AppSettings(use_torch_compile=TORCH_COMPILE)
 
 from app_factory import DEFAULT_ALLOWED_ORIGINS, create_app
 from state import RuntimeConfig, build_initial_state
@@ -246,6 +260,8 @@ runtime_config = RuntimeConfig(
     required_model_types=REQUIRED_MODEL_TYPES,
     outputs_dir=OUTPUTS_DIR,
     settings_file=SETTINGS_FILE,
+    library_file=LIBRARY_FILE,
+    app_data_dir=APP_DATA_DIR,
     ltx_api_base_url=LTX_API_BASE_URL,
     force_api_generations=FORCE_API_GENERATIONS,
     startup_preload_models=STARTUP_PRELOAD_MODELS,
@@ -304,9 +320,10 @@ def log_hardware_info() -> None:
     logger.info(f"SageAttention: {'enabled' if use_sage_attention else 'disabled'}")
     logger.info(f"Python: {sys.version.split()[0]}  |  Torch: {torch.__version__}")
     logger.info(
-        "Startup options: bind_host=%s preload_models=%s require_local_mode=%s",
+        "Startup options: bind_host=%s preload_models=%s torch_compile=%s require_local_mode=%s",
         _resolve_bind_host(),
         STARTUP_PRELOAD_MODELS,
+        TORCH_COMPILE,
         REQUIRE_LOCAL_MODE,
     )
 

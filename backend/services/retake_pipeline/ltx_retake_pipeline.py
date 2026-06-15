@@ -128,7 +128,14 @@ class LTXRetakePipeline:
         try:
             from ltx_pipelines.retake import TemporalRegionMask
         except ImportError:
-            from ltx_pipelines.retake_pipeline import TemporalRegionMask  # type: ignore[no-redef]
+            try:
+                from ltx_pipelines.retake_pipeline import TemporalRegionMask  # type: ignore[no-redef]
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Retake is unavailable: the installed ltx-pipelines package does not provide "
+                    "TemporalRegionMask in 'ltx_pipelines.retake' or 'ltx_pipelines.retake_pipeline'. "
+                    "Update ltx-pipelines to a version that includes retake support."
+                ) from exc
 
         try:
             from ltx_pipelines.utils.constants import DISTILLED_SIGMA_VALUES as _distilled_sigmas

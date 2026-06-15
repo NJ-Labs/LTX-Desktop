@@ -507,6 +507,10 @@ class FakeFastVideoPipeline(_FakeVideoPipelineBase):
         frame_rate: float,
         images: list[ImageConditioningInput],
         output_path: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+        *,
+        num_inference_steps: int = 0,
+        negative_prompt: str = "",
     ) -> None:
         self._record_generate(
             {
@@ -518,6 +522,64 @@ class FakeFastVideoPipeline(_FakeVideoPipelineBase):
                 "frame_rate": frame_rate,
                 "images": images,
                 "output_path": output_path,
+                "num_inference_steps": num_inference_steps,
+                "negative_prompt": negative_prompt,
+            }
+        )
+
+
+class FakeProVideoPipeline(_FakeVideoPipelineBase):
+    pipeline_kind = "pro"
+    use_upscaler = True
+    _singleton: ClassVar["FakeProVideoPipeline | None"] = None
+
+    @classmethod
+    def bind_singleton(cls, pipeline: "FakeProVideoPipeline") -> None:
+        cls._singleton = pipeline
+
+    @staticmethod
+    def create(
+        checkpoint_path: str,
+        gemma_root: str | None,
+        upsampler_path: str,
+        distilled_lora_path: str,
+        use_upscaler: bool,
+        device: str | object,
+    ) -> "FakeProVideoPipeline":
+        del checkpoint_path, gemma_root, upsampler_path, distilled_lora_path, device
+        pipeline = FakeProVideoPipeline._singleton
+        if pipeline is None:
+            raise RuntimeError("FakeProVideoPipeline singleton is not bound")
+        pipeline.use_upscaler = use_upscaler
+        return pipeline
+
+    def generate(
+        self,
+        prompt: str,
+        seed: int,
+        height: int,
+        width: int,
+        num_frames: int,
+        frame_rate: float,
+        images: list[ImageConditioningInput],
+        output_path: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+        *,
+        num_inference_steps: int = 0,
+        negative_prompt: str = "",
+    ) -> None:
+        self._record_generate(
+            {
+                "prompt": prompt,
+                "seed": seed,
+                "height": height,
+                "width": width,
+                "num_frames": num_frames,
+                "frame_rate": frame_rate,
+                "images": images,
+                "output_path": output_path,
+                "num_inference_steps": num_inference_steps,
+                "negative_prompt": negative_prompt,
             }
         )
 
@@ -755,6 +817,7 @@ class FakeServices:
     ltx_api_client: FakeLTXAPIClient = field(default_factory=FakeLTXAPIClient)
     zit_api_client: FakeZitAPIClient = field(default_factory=FakeZitAPIClient)
     fast_video_pipeline: FakeFastVideoPipeline = field(default_factory=FakeFastVideoPipeline)
+    pro_video_pipeline: FakeProVideoPipeline = field(default_factory=FakeProVideoPipeline)
     image_generation_pipeline: FakeImageGenerationPipeline = field(default_factory=FakeImageGenerationPipeline)
     ic_lora_pipeline: FakeIcLoraPipeline = field(default_factory=FakeIcLoraPipeline)
     depth_processor_pipeline: FakeDepthProcessorPipeline = field(default_factory=FakeDepthProcessorPipeline)
@@ -764,6 +827,7 @@ class FakeServices:
 
     def __post_init__(self) -> None:
         FakeFastVideoPipeline.bind_singleton(self.fast_video_pipeline)
+        FakeProVideoPipeline.bind_singleton(self.pro_video_pipeline)
         FakeImageGenerationPipeline.bind_singleton(self.image_generation_pipeline)
         FakeIcLoraPipeline.bind_singleton(self.ic_lora_pipeline)
         FakeDepthProcessorPipeline.bind_singleton(self.depth_processor_pipeline)

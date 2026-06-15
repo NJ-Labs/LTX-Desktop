@@ -6,7 +6,7 @@ from pathlib import Path
 from huggingface_hub import file_download
 
 from runtime_config.model_download_specs import resolve_downloading_dir, resolve_model_path
-from state.app_state_types import DownloadingSession, FileDownloadRunning
+from state.app_state_types import DownloadingSession, FileDownloadRunning, StartupLoading, StartupReady
 
 
 def _model_path(test_state, model_type: str) -> Path:
@@ -77,6 +77,28 @@ class TestModelsStatus:
         assert depth["required"] is False
         assert person_detector["required"] is False
         assert pose["required"] is False
+
+    def test_optional_ltx23_variants_are_in_inventory(self, client):
+        r = client.get("/api/models/status")
+        assert r.status_code == 200
+        models = {m["id"]: m for m in r.json()["models"]}
+
+        # New LTX-2.3 variants are scanned and surfaced in the inventory, but optional.
+        for variant in (
+            "dev_checkpoint",
+            "distilled_lora_384",
+            "distilled_lora_384_v11",
+            "spatial_upscaler_x2_v11",
+            "spatial_upscaler_x15",
+        ):
+            assert models[variant]["required"] is False, variant
+            assert models[variant]["in_inventory"] is True, variant
+
+        # Required models are always part of the inventory.
+        assert models["checkpoint"]["in_inventory"] is True
+        # Internal optional models stay out of the inventory list.
+        assert models["ic_lora"]["in_inventory"] is False
+        assert models["depth_processor"]["in_inventory"] is False
 
     def test_all_downloaded(self, client, create_fake_model_files):
         create_fake_model_files(include_zit=True)
@@ -406,3 +428,23 @@ class TestHuggingFaceInternals:
         assert "_tqdm_bar" in sig.parameters, (
             "file_download.xet_get no longer accepts _tqdm_bar — progress patch for xet downloads is broken"
         )
+
+
+class TestModelPreload:
+    def test_preload_starts_and_warms(self, client, test_state, create_fake_model_files):
+        create_fake_model_files(include_zit=True)
+        test_state.state.app_settings.load_on_startup = False
+
+        r = client.post("/api/models/preload")
+        assert r.status_code == 200
+        assert r.json()["status"] == "started"
+
+        # FakeTaskRunner runs synchronously, so warmup has already completed.
+        assert isinstance(test_state.state.startup, StartupReady)
+
+    def test_preload_conflict_returns_409(self, client, test_state):
+        test_state.state.startup = StartupLoading(current_step="busy", progress=10)
+
+        r = client.post("/api/models/preload")
+        assert r.status_code == 409
+

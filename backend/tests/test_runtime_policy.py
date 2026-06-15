@@ -8,7 +8,10 @@ def test_runtime_policy_true(client, test_state):
 
     response = client.get("/api/runtime-policy")
     assert response.status_code == 200
-    assert response.json() == {"force_api_generations": True}
+    body = response.json()
+    assert body["force_api_generations"] is True
+    assert body["offline_mode"] is False
+    assert body["data_dir"] == str(test_state.config.app_data_dir)
 
 
 def test_runtime_policy_false(client, test_state):
@@ -16,4 +19,7 @@ def test_runtime_policy_false(client, test_state):
 
     response = client.get("/api/runtime-policy")
     assert response.status_code == 200
-    assert response.json() == {"force_api_generations": False}
+    body = response.json()
+    assert body["force_api_generations"] is False
+    assert body["offline_mode"] is False
+    assert body["data_dir"] == str(test_state.config.app_data_dir)

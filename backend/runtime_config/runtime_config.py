@@ -20,6 +20,8 @@ class RuntimeConfig:
     required_model_types: frozenset[ModelFileType]
     outputs_dir: Path
     settings_file: Path
+    library_file: Path
+    app_data_dir: Path
     ltx_api_base_url: str
     force_api_generations: bool
     use_sage_attention: bool

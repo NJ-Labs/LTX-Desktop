@@ -5,13 +5,18 @@ from __future__ import annotations
 from typing import Literal, NamedTuple, TypeAlias, TypedDict
 from typing import Annotated
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 NonEmptyPrompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 ModelFileType = Literal[
     "checkpoint",
+    "dev_checkpoint",
     "upsampler",
+    "spatial_upscaler_x2_v11",
+    "spatial_upscaler_x15",
     "distilled_lora",
+    "distilled_lora_384",
+    "distilled_lora_384_v11",
     "ic_lora",
     "depth_processor",
     "person_detector",
@@ -99,6 +104,7 @@ class GpuInfoResponse(BaseModel):
 class RuntimePolicyResponse(BaseModel):
     force_api_generations: bool
     offline_mode: bool = False
+    data_dir: str = ""
 
 
 class GenerationProgressResponse(BaseModel):
@@ -127,6 +133,7 @@ class ModelFileStatus(BaseModel):
     relative_path: str
     resolved_path: str
     optional_reason: str | None = None
+    in_inventory: bool = True
 
 
 class TextEncoderStatus(BaseModel):
@@ -212,8 +219,34 @@ class TextEncoderDownloadResponse(BaseModel):
     sessionId: str | None = None
 
 
+class ModelPreloadResponse(BaseModel):
+    status: str
+    message: str | None = None
+
+
 class StatusResponse(BaseModel):
     status: str
+
+
+def _default_json_object_list() -> list[JsonObject]:
+    return []
+
+
+class LibraryPayload(BaseModel):
+    """Opaque persisted project library for self-hosted/web deployments.
+
+    The backend is a dumb store: project and asset shapes are owned by the
+    frontend, so entries are kept as arbitrary JSON objects and passed through
+    unchanged. ``projects`` holds full projects (name, description, cover image,
+    assets, timelines); ``playground_assets`` holds Playground-generated assets.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    projects: list[JsonObject] = Field(default_factory=_default_json_object_list)
+    playground_assets: list[JsonObject] = Field(
+        default_factory=_default_json_object_list, alias="playgroundAssets"
+    )
 
 
 class ErrorResponse(BaseModel):
@@ -246,6 +279,28 @@ class GenerateImageRequest(BaseModel):
     height: int = 1024
     numSteps: int = 4
     numImages: int = 1
+
+
+class EnhancePromptRequest(BaseModel):
+    prompt: NonEmptyPrompt
+    mode: Literal["video", "image"] = "video"
+
+
+class EnhancePromptResponse(BaseModel):
+    status: str
+    enhanced_prompt: str
+
+
+class TestPromptEnhancerRequest(BaseModel):
+    baseUrl: str | None = None
+    apiKey: str | None = None
+    model: str | None = None
+
+
+class TestPromptEnhancerResponse(BaseModel):
+    status: str
+    message: str
+    model: str | None = None
 
 
 def _default_model_types() -> set[ModelFileType]:

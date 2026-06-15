@@ -12,8 +12,10 @@ from handlers import (
     HealthHandler,
     IcLoraHandler,
     ImageGenerationHandler,
+    LibraryHandler,
     ModelsHandler,
     PipelinesHandler,
+    PromptEnhancerHandler,
     SuggestGapPromptHandler,
     RetakeHandler,
     RuntimePolicyHandler,
@@ -35,6 +37,7 @@ from services.interfaces import (
     LTXAPIClient,
     ModelDownloader,
     PoseProcessorPipeline,
+    ProVideoPipeline,
     RetakePipeline,
     TaskRunner,
     TextEncoder,
@@ -60,6 +63,7 @@ class AppHandler:
         ltx_api_client: LTXAPIClient,
         zit_api_client: ZitAPIClient,
         fast_video_pipeline_class: type[FastVideoPipeline],
+        pro_video_pipeline_class: type[ProVideoPipeline],
         image_generation_pipeline_class: type[ImageGenerationPipeline],
         ic_lora_pipeline_class: type[IcLoraPipeline],
         depth_processor_pipeline_class: type[DepthProcessorPipeline],
@@ -79,6 +83,7 @@ class AppHandler:
         self.ltx_api_client = ltx_api_client
         self.zit_api_client = zit_api_client
         self.fast_video_pipeline_class = fast_video_pipeline_class
+        self.pro_video_pipeline_class = pro_video_pipeline_class
         self.image_generation_pipeline_class = image_generation_pipeline_class
         self.ic_lora_pipeline_class = ic_lora_pipeline_class
         self.depth_processor_pipeline_class = depth_processor_pipeline_class
@@ -91,8 +96,13 @@ class AppHandler:
         self.state = AppState(
             available_files={
                 "checkpoint": None,
+                "dev_checkpoint": None,
                 "upsampler": None,
+                "spatial_upscaler_x2_v11": None,
+                "spatial_upscaler_x15": None,
                 "distilled_lora": None,
+                "distilled_lora_384": None,
+                "distilled_lora_384_v11": None,
                 "ic_lora": None,
                 "depth_processor": None,
                 "person_detector": None,
@@ -119,6 +129,12 @@ class AppHandler:
             config=config,
         )
         self.settings.load_settings(default_settings)
+
+        self.library = LibraryHandler(
+            state=self.state,
+            lock=self._lock,
+            config=config,
+        )
 
         self.models = ModelsHandler(
             state=self.state,
@@ -147,6 +163,7 @@ class AppHandler:
             text_handler=self.text,
             gpu_cleaner=gpu_cleaner,
             fast_video_pipeline_class=fast_video_pipeline_class,
+            pro_video_pipeline_class=pro_video_pipeline_class,
             image_generation_pipeline_class=image_generation_pipeline_class,
             ic_lora_pipeline_class=ic_lora_pipeline_class,
             depth_processor_pipeline_class=depth_processor_pipeline_class,
@@ -183,12 +200,20 @@ class AppHandler:
             models_handler=self.models,
             pipelines_handler=self.pipelines,
             gpu_info=gpu_info,
+            task_runner=task_runner,
             config=config,
         )
 
         self.runtime_policy = RuntimePolicyHandler(config=config)
 
         self.suggest_gap_prompt = SuggestGapPromptHandler(
+            state=self.state,
+            lock=self._lock,
+            config=config,
+            http=http,
+        )
+
+        self.prompt_enhancer = PromptEnhancerHandler(
             state=self.state,
             lock=self._lock,
             config=config,
@@ -231,6 +256,7 @@ class ServiceBundle:
     ltx_api_client: LTXAPIClient
     zit_api_client: ZitAPIClient
     fast_video_pipeline_class: type[FastVideoPipeline]
+    pro_video_pipeline_class: type[ProVideoPipeline]
     image_generation_pipeline_class: type[ImageGenerationPipeline]
     ic_lora_pipeline_class: type[IcLoraPipeline]
     depth_processor_pipeline_class: type[DepthProcessorPipeline]
@@ -242,6 +268,7 @@ class ServiceBundle:
 def build_default_service_bundle(config: RuntimeConfig) -> ServiceBundle:
     """Build real runtime services with lazy heavy imports isolated from tests."""
     from services.fast_video_pipeline.ltx_fast_video_pipeline import LTXFastVideoPipeline
+    from services.pro_video_pipeline.ltx_pro_video_pipeline import LTXProVideoPipeline
     from services.zit_api_client.zit_api_client_impl import ZitAPIClientImpl
     from services.gpu_cleaner.torch_cleaner import TorchCleaner
     from services.gpu_info.gpu_info_impl import GpuInfoImpl
@@ -275,6 +302,7 @@ def build_default_service_bundle(config: RuntimeConfig) -> ServiceBundle:
         ltx_api_client=LTXAPIClientImpl(http=http, ltx_api_base_url=config.ltx_api_base_url),
         zit_api_client=ZitAPIClientImpl(http=http),
         fast_video_pipeline_class=LTXFastVideoPipeline,
+        pro_video_pipeline_class=LTXProVideoPipeline,
         image_generation_pipeline_class=ZitImageGenerationPipeline,
         ic_lora_pipeline_class=LTXIcLoraPipeline,
         depth_processor_pipeline_class=MidasDPTPipeline,
@@ -304,6 +332,7 @@ def build_initial_state(
         ltx_api_client=bundle.ltx_api_client,
         zit_api_client=bundle.zit_api_client,
         fast_video_pipeline_class=bundle.fast_video_pipeline_class,
+        pro_video_pipeline_class=bundle.pro_video_pipeline_class,
         image_generation_pipeline_class=bundle.image_generation_pipeline_class,
         ic_lora_pipeline_class=bundle.ic_lora_pipeline_class,
         depth_processor_pipeline_class=bundle.depth_processor_pipeline_class,

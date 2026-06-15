@@ -32,8 +32,10 @@ def route_post_settings(
     if "models_dir" in patch_data or "modelsDir" in patch_data:
         guard_admin_permission(request)
 
-    _, _after, changed_paths = handler.settings.update_settings(req)
+    before, after, changed_paths = handler.settings.update_settings(req)
     changed_roots = {path.split(".", 1)[0] for path in changed_paths}
+
+    handler.health.apply_runtime_settings(before, after)
 
     logger.info(
         "Applied settings patch (changed=%s)",

@@ -132,6 +132,30 @@ class TestGenerate:
         assert call["width"] == 1280
         assert call["height"] == 704
 
+    def test_resolution_mapping_1440p(self, client, test_state, fake_services, create_fake_model_files):
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+
+        r = client.post("/api/generate", json={**_T2V_JSON, "resolution": "1440p"})
+        assert r.status_code == 200
+
+        pipeline = fake_services.fast_video_pipeline
+        call = pipeline.generate_calls[0]
+        assert call["width"] == 2560
+        assert call["height"] == 1408
+
+    def test_resolution_mapping_2160p(self, client, test_state, fake_services, create_fake_model_files):
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+
+        r = client.post("/api/generate", json={**_T2V_JSON, "resolution": "2160p"})
+        assert r.status_code == 200
+
+        pipeline = fake_services.fast_video_pipeline
+        call = pipeline.generate_calls[0]
+        assert call["width"] == 3840
+        assert call["height"] == 2176
+
     def test_locked_seed(self, client, test_state, fake_services, create_fake_model_files):
         create_fake_model_files()
         _enable_local_text_encoding(test_state)
@@ -355,6 +379,8 @@ class TestA2VGenerate:
             ("540p", 960, 576),
             ("720p", 1280, 704),
             ("1080p", 1920, 1088),
+            ("1440p", 2560, 1408),
+            ("2160p", 3840, 2176),
         ]:
             fake_services.a2v_pipeline.generate_calls.clear()
             r = client.post(

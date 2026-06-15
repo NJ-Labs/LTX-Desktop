@@ -19,7 +19,9 @@ from _routes.generation import router as generation_router
 from _routes.health import router as health_router
 from _routes.ic_lora import router as ic_lora_router
 from _routes.image_gen import router as image_gen_router
+from _routes.library import router as library_router
 from _routes.models import router as models_router
+from _routes.prompt_enhancer import router as prompt_enhancer_router
 from _routes.suggest_gap_prompt import router as suggest_gap_prompt_router
 from _routes.retake import router as retake_router
 from _routes.runtime_policy import router as runtime_policy_router
@@ -122,10 +124,12 @@ def create_app(
     app.include_router(models_router)
     app.include_router(settings_router)
     app.include_router(image_gen_router)
+    app.include_router(prompt_enhancer_router)
     app.include_router(suggest_gap_prompt_router)
     app.include_router(retake_router)
     app.include_router(ic_lora_router)
     app.include_router(runtime_policy_router)
+    app.include_router(library_router)
 
     allowed_media_roots = [root.resolve() for root in (media_roots or [])]
 
@@ -159,7 +163,7 @@ def create_app(
 
             return FileResponse(resolved)
 
-    if serve_frontend:
+    if serve_frontend and static_dir is not None:
         index_file = static_dir / "index.html"
 
         @app.get("/")

@@ -11,6 +11,7 @@ from api_types import (
     ModelDownloadRequest,
     ModelDownloadStartResponse,
     ModelInfo,
+    ModelPreloadResponse,
     ModelsStatusResponse,
     RequiredModelsResponse,
     TextEncoderDownloadResponse,
@@ -72,6 +73,14 @@ def route_model_download(
         )
 
     raise HTTPError(400, "Failed to start download")
+
+
+@router.post("/models/preload", response_model=ModelPreloadResponse)
+def route_models_preload(handler: AppHandler = Depends(get_state_service)) -> ModelPreloadResponse:
+    started = handler.health.start_manual_preload()
+    if not started:
+        raise HTTPError(409, "Model preload already in progress")
+    return ModelPreloadResponse(status="started", message="Model preload started")
 
 
 @router.post("/text-encoder/download", response_model=TextEncoderDownloadResponse)

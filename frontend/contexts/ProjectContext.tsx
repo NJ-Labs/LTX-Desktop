@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import type { Project, Asset, AssetTake, ViewType, ProjectTab, Timeline } from '../types/project'
+import type { Project, Asset, AssetTake, ViewType, ProjectTab, Timeline, ProjectDetails } from '../types/project'
 import { createDefaultTimeline } from '../types/project'
 import { logger } from '../lib/logger'
+import { isWebMode } from '../lib/web-mode'
+import { loadLibrary, saveLibrary } from '../lib/library'
 
 interface ProjectContextType {
   // Navigation
@@ -15,9 +17,10 @@ interface ProjectContextType {
   // Projects
   projects: Project[]
   currentProject: Project | null
-  createProject: (name: string) => Project
+  createProject: (details: ProjectDetails) => Project
   deleteProject: (id: string) => void
   renameProject: (id: string, name: string) => void
+  updateProject: (id: string, details: ProjectDetails) => void
   
   // Assets
   addAsset: (projectId: string, asset: Omit<Asset, 'id' | 'createdAt'>) => Asset
@@ -27,6 +30,12 @@ interface ProjectContextType {
   deleteTakeFromAsset: (projectId: string, assetId: string, takeIndex: number) => void
   setAssetActiveTake: (projectId: string, assetId: string, takeIndex: number) => void
   toggleFavorite: (projectId: string, assetId: string) => void
+  
+  // Playground assets (videos generated in the Playground, not tied to a project)
+  playgroundAssets: Asset[]
+  addPlaygroundAsset: (asset: Omit<Asset, 'id' | 'createdAt'>) => Asset
+  deletePlaygroundAsset: (assetId: string) => void
+  togglePlaygroundFavorite: (assetId: string) => void
   
   // Timelines
   addTimeline: (projectId: string, name?: string) => Timeline
@@ -91,6 +100,11 @@ export interface PendingIcLoraUpdate {
 const ProjectContext = createContext<ProjectContextType | null>(null)
 
 const STORAGE_KEY = 'ltx-projects'
+const PLAYGROUND_STORAGE_KEY = 'ltx-playground-assets'
+
+// Folder name used when copying Playground-generated videos into the shared
+// assets directory. Distinct from real project IDs (which are `project-...`).
+export const PLAYGROUND_ASSET_FOLDER = 'playground'
 
 // Migrate old projects that don't have timelines
 function migrateProject(project: Project): Project {
@@ -167,6 +181,26 @@ function loadProjectsFromStorage(): Project[] {
   return []
 }
 
+// Load playground assets from localStorage, recovering broken blob URLs
+function loadPlaygroundAssetsFromStorage(): Asset[] {
+  try {
+    const stored = localStorage.getItem(PLAYGROUND_STORAGE_KEY)
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      if (Array.isArray(parsed)) {
+        return parsed.map((asset: Asset) =>
+          asset.url && asset.url.startsWith('blob:') && isRealPath(asset.path)
+            ? { ...asset, url: pathToFileUrl(asset.path) }
+            : asset
+        )
+      }
+    }
+  } catch (e) {
+    logger.error(`Failed to load playground assets: ${e}`)
+  }
+  return []
+}
+
 export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [currentView, setCurrentView] = useState<ViewType>('home')
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
@@ -179,18 +213,42 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [genSpaceIcLoraSource, setGenSpaceIcLoraSource] = useState<GenSpaceIcLoraSource | null>(null)
   const [pendingIcLoraUpdate, setPendingIcLoraUpdate] = useState<PendingIcLoraUpdate | null>(null)
   // Initialize with data from localStorage
-  const [projects, setProjects] = useState<Project[]>(() => loadProjectsFromStorage())
+  const [projects, setProjects] = useState<Project[]>(() => (isWebMode() ? [] : loadProjectsFromStorage()))
+  const [playgroundAssets, setPlaygroundAssets] = useState<Asset[]>(() => (isWebMode() ? [] : loadPlaygroundAssetsFromStorage()))
   const isInitializedRef = useRef(false)
-  
-  // Mark as initialized after first render
+  const webReadyRef = useRef(false)
+  const librarySaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Mark as initialized after first render.
+  // Desktop is ready immediately (localStorage loaded synchronously above).
+  // Web/self-hosted hydrates from the backend project library, then enables
+  // saving. Saving is gated on a *successful* load so a transient fetch error
+  // can never overwrite existing server data with an empty snapshot.
   useEffect(() => {
-    isInitializedRef.current = true
+    if (!isWebMode()) {
+      isInitializedRef.current = true
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const snapshot = await loadLibrary()
+      if (!cancelled && snapshot) {
+        setProjects((snapshot.projects as Project[]).map(migrateProject).map(recoverAssetUrls))
+        setPlaygroundAssets(snapshot.playgroundAssets as Asset[])
+        webReadyRef.current = true
+      }
+      isInitializedRef.current = true
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [])
   
   // Save projects to localStorage when changed (but not on initial load)
   useEffect(() => {
     // Skip saving on initial render to avoid overwriting with stale data
     if (!isInitializedRef.current) return
+    if (isWebMode()) return // Web persists via the backend library (effect below)
     
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
@@ -200,13 +258,40 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     }
   }, [projects])
   
+  // Save playground assets to localStorage when changed (but not on initial load)
+  useEffect(() => {
+    if (!isInitializedRef.current) return
+    if (isWebMode()) return // Web persists via the backend library (effect below)
+    try {
+      localStorage.setItem(PLAYGROUND_STORAGE_KEY, JSON.stringify(playgroundAssets))
+    } catch (e) {
+      logger.error(`Failed to save playground assets: ${e}`)
+    }
+  }, [playgroundAssets])
+
+  // Web/self-hosted: persist the full library to the backend (debounced) so
+  // projects and Playground assets survive container restarts when --data-dir
+  // is mounted. Gated on a successful initial load (webReadyRef).
+  useEffect(() => {
+    if (!isInitializedRef.current || !isWebMode() || !webReadyRef.current) return
+    if (librarySaveTimerRef.current) clearTimeout(librarySaveTimerRef.current)
+    librarySaveTimerRef.current = setTimeout(() => {
+      void saveLibrary({ projects, playgroundAssets })
+    }, 500)
+    return () => {
+      if (librarySaveTimerRef.current) clearTimeout(librarySaveTimerRef.current)
+    }
+  }, [projects, playgroundAssets])
+  
   const currentProject = projects.find(p => p.id === currentProjectId) || null
   
-  const createProject = useCallback((name: string): Project => {
+  const createProject = useCallback((details: ProjectDetails): Project => {
     const defaultTimeline = createDefaultTimeline('Timeline 1')
     const newProject: Project = {
       id: `project-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      name,
+      name: details.name.trim(),
+      description: details.description?.trim() || undefined,
+      coverImage: details.coverImage || undefined,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       assets: [],
@@ -228,6 +313,22 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const renameProject = useCallback((id: string, name: string) => {
     setProjects(prev => prev.map(p => 
       p.id === id ? { ...p, name, updatedAt: Date.now() } : p
+    ))
+  }, [])
+
+  // Updates the editable project details (name, description, cover image).
+  // The cover image is independent from the asset-derived `thumbnail` fallback.
+  const updateProject = useCallback((id: string, details: ProjectDetails) => {
+    setProjects(prev => prev.map(p => 
+      p.id === id
+        ? {
+            ...p,
+            name: details.name.trim(),
+            description: details.description?.trim() || undefined,
+            coverImage: details.coverImage || undefined,
+            updatedAt: Date.now(),
+          }
+        : p
     ))
   }, [])
 
@@ -363,6 +464,28 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
             updatedAt: Date.now(),
           } 
         : p
+    ))
+  }, [])
+  
+  // --- Playground assets ---
+  
+  const addPlaygroundAsset = useCallback((assetData: Omit<Asset, 'id' | 'createdAt'>): Asset => {
+    const newAsset: Asset = {
+      ...assetData,
+      id: `pg-asset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: Date.now(),
+    }
+    setPlaygroundAssets(prev => [newAsset, ...prev])
+    return newAsset
+  }, [])
+  
+  const deletePlaygroundAsset = useCallback((assetId: string) => {
+    setPlaygroundAssets(prev => prev.filter(a => a.id !== assetId))
+  }, [])
+  
+  const togglePlaygroundFavorite = useCallback((assetId: string) => {
+    setPlaygroundAssets(prev => prev.map(a => 
+      a.id === assetId ? { ...a, favorite: !a.favorite } : a
     ))
   }, [])
   
@@ -507,6 +630,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       createProject,
       deleteProject,
       renameProject,
+      updateProject,
       addAsset,
       deleteAsset,
       updateAsset,
@@ -514,6 +638,10 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       deleteTakeFromAsset,
       setAssetActiveTake,
       toggleFavorite,
+      playgroundAssets,
+      addPlaygroundAsset,
+      deletePlaygroundAsset,
+      togglePlaygroundFavorite,
       addTimeline,
       deleteTimeline,
       renameTimeline,

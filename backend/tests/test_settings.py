@@ -7,6 +7,7 @@ from pathlib import Path
 
 from state.app_settings import AppSettings, UpdateSettingsRequest
 from state import build_initial_state
+from state.app_state_types import GpuSlot
 from app_handler import ServiceBundle
 from tests.conftest import TEST_ADMIN_TOKEN
 from tests.fakes.services import FakeServices
@@ -141,6 +142,25 @@ class TestPostSettings:
         r = client.post("/api/settings", json={"unknownSetting": True})
         assert r.status_code == 422
 
+    def test_enabling_preload_triggers_background_warmup(self, client, test_state, create_fake_model_files):
+        create_fake_model_files(include_zit=True)
+        r = client.post("/api/settings", json={"loadOnStartup": True})
+        assert r.status_code == 200
+        assert test_state.state.app_settings.load_on_startup is True
+        # Side-effect: models are loaded without an app restart.
+        assert isinstance(test_state.state.gpu_slot, GpuSlot)
+
+    def test_enabling_torch_compile_drops_loaded_pipeline(self, client, test_state, create_fake_model_files):
+        create_fake_model_files()
+        test_state.pipelines.load_gpu_pipeline("fast")
+        assert isinstance(test_state.state.gpu_slot, GpuSlot)
+
+        r = client.post("/api/settings", json={"useTorchCompile": True})
+        assert r.status_code == 200
+        assert test_state.state.app_settings.use_torch_compile is True
+        # Uncompiled pipeline dropped so the next load applies the new setting.
+        assert test_state.state.gpu_slot is None
+
 
 class TestModelsDirAdminGuard:
     def test_models_dir_requires_admin_token(self, client, test_state):
@@ -202,6 +222,7 @@ class TestModelsDirAdminGuard:
             ltx_api_client=fake_services.ltx_api_client,
             zit_api_client=fake_services.zit_api_client,
             fast_video_pipeline_class=type(fake_services.fast_video_pipeline),
+            pro_video_pipeline_class=type(fake_services.pro_video_pipeline),
             image_generation_pipeline_class=type(fake_services.image_generation_pipeline),
             ic_lora_pipeline_class=type(fake_services.ic_lora_pipeline),
             depth_processor_pipeline_class=type(fake_services.depth_processor_pipeline),
@@ -228,6 +249,7 @@ class TestSettingsPersistence:
             ltx_api_client=fake_services.ltx_api_client,
             zit_api_client=fake_services.zit_api_client,
             fast_video_pipeline_class=type(fake_services.fast_video_pipeline),
+            pro_video_pipeline_class=type(fake_services.pro_video_pipeline),
             image_generation_pipeline_class=type(fake_services.image_generation_pipeline),
             ic_lora_pipeline_class=type(fake_services.ic_lora_pipeline),
             depth_processor_pipeline_class=type(fake_services.depth_processor_pipeline),

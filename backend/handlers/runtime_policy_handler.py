@@ -15,4 +15,5 @@ class RuntimePolicyHandler:
         return RuntimePolicyResponse(
             force_api_generations=self._config.force_api_generations,
             offline_mode=self._config.offline_mode,
+            data_dir=str(self._config.app_data_dir),
         )
