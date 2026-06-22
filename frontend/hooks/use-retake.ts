@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 import { backendFetch } from '../lib/backend'
+import { isGatewayTimeoutStatus, waitForGenerationTerminal } from '../lib/generation-poll'
 import { logger } from '../lib/logger'
 import { pathToBrowserUrl } from '../lib/web-mode'
 
@@ -43,18 +44,67 @@ export function useRetake() {
       result: null,
     })
 
+    // Recover the result by polling progress when the (blocking) request can't
+    // be awaited to completion — e.g. a reverse-proxy gateway timeout (504) on
+    // a long retake. The backend keeps generating, so we wait it out.
+    const recoverByPolling = async (): Promise<boolean> => {
+      try {
+        const terminal = await waitForGenerationTerminal(
+          new AbortController().signal,
+          () => {
+            setState(prev => ({ ...prev, isRetaking: true, retakeStatus: 'Generating' }))
+          },
+        )
+        if (terminal.status === 'complete' && terminal.videoPath) {
+          setState({
+            isRetaking: false,
+            retakeStatus: 'Retake complete!',
+            retakeError: null,
+            result: {
+              videoPath: terminal.videoPath,
+              videoUrl: pathToBrowserUrl(terminal.videoPath),
+            },
+          })
+          return true
+        }
+        if (terminal.status === 'cancelled') {
+          setState({ isRetaking: false, retakeStatus: '', retakeError: null, result: null })
+          return true
+        }
+        if (terminal.status === 'error') {
+          setState({ isRetaking: false, retakeStatus: '', retakeError: terminal.error || 'Retake failed', result: null })
+          return true
+        }
+      } catch (pollError) {
+        logger.error(`Retake polling fallback failed: ${(pollError as Error).message}`)
+      }
+      return false
+    }
+
     try {
-      const response = await backendFetch('/api/retake', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          video_path: params.videoPath,
-          start_time: params.startTime,
-          duration: params.duration,
-          prompt: params.prompt,
-          mode: params.mode,
-        }),
-      })
+      let response: Response
+      try {
+        response = await backendFetch('/api/retake', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            video_path: params.videoPath,
+            start_time: params.startTime,
+            duration: params.duration,
+            prompt: params.prompt,
+            mode: params.mode,
+          }),
+        })
+      } catch (networkError) {
+        // The connection dropped (proxy/gateway) — the backend may still be
+        // generating. Try to recover the outcome by polling.
+        if (await recoverByPolling()) return
+        throw networkError
+      }
+
+      if (!response.ok && isGatewayTimeoutStatus(response.status)) {
+        if (await recoverByPolling()) return
+      }
 
       const data = await response.json()
 

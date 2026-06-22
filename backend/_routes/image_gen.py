@@ -16,6 +16,11 @@ def route_generate_image(
     req: GenerateImageRequest,
     handler: AppHandler = Depends(get_state_service),
 ) -> GenerateImageResponse:
-    """POST /api/generate-image."""
-    return handler.image_generation.generate(req)
+    """POST /api/generate-image.
+
+    Non-blocking: schedules generation in the background and returns immediately
+    so long generations cannot trip a reverse-proxy 504. The client polls
+    /api/generation/progress for completion and the result.
+    """
+    return handler.image_generation.generate_async(req)
 

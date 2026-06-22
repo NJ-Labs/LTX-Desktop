@@ -182,6 +182,7 @@ class AppHandler:
             pipelines_handler=self.pipelines,
             text_handler=self.text,
             ltx_api_client=ltx_api_client,
+            task_runner=task_runner,
             config=config,
         )
 
@@ -192,6 +193,7 @@ class AppHandler:
             pipelines_handler=self.pipelines,
             config=config,
             zit_api_client=zit_api_client,
+            task_runner=task_runner,
         )
 
         self.health = HealthHandler(

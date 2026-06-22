@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 import { backendFetch } from '../lib/backend'
+import { isGatewayTimeoutStatus, waitForGenerationTerminal } from '../lib/generation-poll'
 import { logger } from '../lib/logger'
 import { pathToBrowserUrl } from '../lib/web-mode'
 
@@ -42,17 +43,64 @@ export function useIcLora() {
       result: null,
     })
 
+    // Recover the result by polling progress when the (blocking) request can't
+    // be awaited to completion — e.g. a reverse-proxy gateway timeout (504) on
+    // a long generation. The backend keeps generating, so we wait it out.
+    const recoverByPolling = async (): Promise<boolean> => {
+      try {
+        const terminal = await waitForGenerationTerminal(
+          new AbortController().signal,
+          () => {
+            setState(prev => ({ ...prev, isGenerating: true, status: 'Generating' }))
+          },
+        )
+        if (terminal.status === 'complete' && terminal.videoPath) {
+          setState({
+            isGenerating: false,
+            status: 'Generation complete!',
+            error: null,
+            result: {
+              videoPath: terminal.videoPath,
+              videoUrl: pathToBrowserUrl(terminal.videoPath),
+            },
+          })
+          return true
+        }
+        if (terminal.status === 'cancelled') {
+          setState({ isGenerating: false, status: '', error: null, result: null })
+          return true
+        }
+        if (terminal.status === 'error') {
+          setState({ isGenerating: false, status: '', error: terminal.error || 'IC-LoRA failed', result: null })
+          return true
+        }
+      } catch (pollError) {
+        logger.error(`IC-LoRA polling fallback failed: ${(pollError as Error).message}`)
+      }
+      return false
+    }
+
     try {
-      const response = await backendFetch('/api/ic-lora/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          video_path: params.videoPath,
-          conditioning_type: params.conditioningType,
-          conditioning_strength: params.conditioningStrength,
-          prompt: params.prompt,
-        }),
-      })
+      let response: Response
+      try {
+        response = await backendFetch('/api/ic-lora/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            video_path: params.videoPath,
+            conditioning_type: params.conditioningType,
+            conditioning_strength: params.conditioningStrength,
+            prompt: params.prompt,
+          }),
+        })
+      } catch (networkError) {
+        if (await recoverByPolling()) return
+        throw networkError
+      }
+
+      if (!response.ok && isGatewayTimeoutStatus(response.status)) {
+        if (await recoverByPolling()) return
+      }
 
       const data = await response.json()
       if (response.ok && data.status === 'complete' && data.video_path) {

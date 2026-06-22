@@ -23,7 +23,7 @@ interface SettingsModalProps {
 type TabId = 'general' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, forceApiGenerations, offlineMode, serverDataDir } = useAppSettings()
+  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, savePromptEnhancerApiKey, forceApiGenerations, offlineMode, serverDataDir } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [ltxApiKeyInput, setLtxApiKeyInput] = useState('')
@@ -33,6 +33,10 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const falApiKeyInputRef = useRef<HTMLInputElement>(null)
   const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('')
   const geminiApiKeyInputRef = useRef<HTMLInputElement>(null)
+  const [promptEnhancerApiKeyInput, setPromptEnhancerApiKeyInput] = useState('')
+  const [promptEnhancerKeySaving, setPromptEnhancerKeySaving] = useState(false)
+  const [promptEnhancerTesting, setPromptEnhancerTesting] = useState(false)
+  const [promptEnhancerTestResult, setPromptEnhancerTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [textEncoderStatus, setTextEncoderStatus] = useState<TextEncoderStatus | null>(null)
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
@@ -49,7 +53,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   // Sync active tab with initialTab prop when modal opens
   useEffect(() => {
     if (isOpen && initialTab) {
-      if (offlineMode && (initialTab === 'apiKeys' || initialTab === 'promptEnhancer')) {
+      if (offlineMode && initialTab === 'apiKeys') {
         setActiveTab('general')
         return
       }
@@ -236,6 +240,62 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       onSettingsChange({ ...settings, promptEnhancerEnabledI2V: !settings.promptEnhancerEnabledI2V })
     }
   }
+
+  const handleSavePromptEnhancerApiKey = async () => {
+    setPromptEnhancerKeySaving(true)
+    setPromptEnhancerTestResult(null)
+    try {
+      await savePromptEnhancerApiKey(promptEnhancerApiKeyInput)
+      setPromptEnhancerApiKeyInput('')
+    } catch (e) {
+      logger.error(`Failed to save prompt enhancer API key: ${e}`)
+    } finally {
+      setPromptEnhancerKeySaving(false)
+    }
+  }
+
+  const handleClearPromptEnhancerApiKey = async () => {
+    setPromptEnhancerKeySaving(true)
+    try {
+      await savePromptEnhancerApiKey('')
+      setPromptEnhancerApiKeyInput('')
+    } catch (e) {
+      logger.error(`Failed to clear prompt enhancer API key: ${e}`)
+    } finally {
+      setPromptEnhancerKeySaving(false)
+    }
+  }
+
+  const handleTestPromptEnhancer = async () => {
+    setPromptEnhancerTesting(true)
+    setPromptEnhancerTestResult(null)
+    try {
+      const body: { baseUrl?: string; model?: string; apiKey?: string } = {
+        baseUrl: settings.promptEnhancerBaseUrl.trim(),
+        model: settings.promptEnhancerModel.trim(),
+      }
+      if (promptEnhancerApiKeyInput.trim()) {
+        body.apiKey = promptEnhancerApiKeyInput.trim()
+      }
+      const response = await backendFetch('/api/prompt-enhancer/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = (await response.json().catch(() => ({}))) as { message?: unknown; error?: unknown }
+      if (response.ok) {
+        const message = typeof data.message === 'string' ? data.message : 'Connection successful.'
+        setPromptEnhancerTestResult({ ok: true, message })
+      } else {
+        const detail = typeof data.error === 'string' ? data.error : typeof data.message === 'string' ? data.message : `Request failed (${response.status})`
+        setPromptEnhancerTestResult({ ok: false, message: detail })
+      }
+    } catch (e) {
+      setPromptEnhancerTestResult({ ok: false, message: e instanceof Error ? e.message : 'Connection failed' })
+    } finally {
+      setPromptEnhancerTesting(false)
+    }
+  }
   // Analytics handler
   const handleToggleAnalytics = () => {
     const next = !analyticsEnabled
@@ -302,7 +362,9 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     if (!offlineMode) {
       return true
     }
-    return tab.id !== 'apiKeys' && tab.id !== 'promptEnhancer'
+    // The Prompt Enhancer uses a user-configured local LLM endpoint, so it is
+    // available offline. Only the LTX API Keys tab is hidden in offline mode.
+    return tab.id !== 'apiKeys'
   })
 
   return (
@@ -1148,7 +1210,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
             </>
           )}
 
-          {activeTab === 'promptEnhancer' && !offlineMode && (
+          {activeTab === 'promptEnhancer' && (
             <>
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
@@ -1157,80 +1219,153 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 </div>
 
                 <p className="text-xs text-zinc-500 leading-relaxed">
-                  Automatically enhances your prompts via the LTX API with rich visual details, sound descriptions,
-                  and motion cues to help generate higher quality videos. Control independently for each generation type.
+                  Enhances your prompts using your own OpenAI-compatible LLM endpoint (e.g. LM Studio, Ollama,
+                  vLLM, or any hosted OpenAI-compatible API). Requests go from the backend to the URL you set
+                  below, so this works fully offline / air-gapped. Configure the endpoint, then enable enhancement
+                  per generation type.
                 </p>
 
-                {!settings.hasLtxApiKey ? (
-                  <div className="space-y-4 mt-2">
-                    <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-4 space-y-3">
-                      <div className="flex items-start gap-2.5">
-                        <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5 flex-shrink-0" />
-                        <div className="space-y-2">
-                          <p className="text-sm text-amber-300 font-medium">LTX API key required</p>
-                          <p className="text-xs text-zinc-400 leading-relaxed">
-                            Prompt enhancement runs server-side on the LTX API. To use this feature, you need to configure
-                            an API key in the API Keys tab.
-                          </p>
-                        </div>
-                      </div>
+                {/* Base URL */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-300">Base URL</label>
+                  <input
+                    type="text"
+                    value={settings.promptEnhancerBaseUrl}
+                    onChange={(e) => onSettingsChange({ ...settings, promptEnhancerBaseUrl: e.target.value })}
+                    placeholder="http://localhost:1234/v1"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500"
+                  />
+                  <p className="text-[10px] text-zinc-500">
+                    OpenAI-compatible base URL. The backend calls <span className="text-zinc-400">{'<base-url>'}/chat/completions</span>.
+                  </p>
+                </div>
+
+                {/* Model */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-300">Model</label>
+                  <input
+                    type="text"
+                    value={settings.promptEnhancerModel}
+                    onChange={(e) => onSettingsChange({ ...settings, promptEnhancerModel: e.target.value })}
+                    placeholder="e.g. qwen2.5-7b-instruct"
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500"
+                  />
+                  <p className="text-[10px] text-zinc-500">
+                    Model name as exposed by your endpoint. Leave blank to let the server pick a default.
+                  </p>
+                </div>
+
+                {/* Optional API key */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-300">
+                    API Key <span className="text-zinc-500 font-normal">(optional)</span>
+                  </label>
+                  {settings.hasPromptEnhancerApiKey && !promptEnhancerApiKeyInput ? (
+                    <div className="flex items-center justify-between bg-zinc-800/60 border border-zinc-700 rounded-lg px-3 py-2">
+                      <span className="flex items-center gap-2 text-sm text-emerald-300">
+                        <Check className="h-4 w-4" /> API key saved
+                      </span>
                       <button
-                        onClick={() => setActiveTab('apiKeys')}
-                        className="w-full mt-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
+                        onClick={handleClearPromptEnhancerApiKey}
+                        disabled={promptEnhancerKeySaving}
+                        className="text-xs text-zinc-400 hover:text-red-400 disabled:opacity-50"
                       >
-                        Set API Key
+                        Remove
                       </button>
                     </div>
-                  </div>
-                ) : (
-                  <>
-                    {/* T2V Toggle */}
-                    <div
-                      className="flex items-center justify-between bg-zinc-800/50 rounded-lg px-4 py-3 border border-zinc-700/50 cursor-pointer"
-                      onClick={() => handleTogglePromptEnhancer('t2v')}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs font-semibold text-blue-400 bg-blue-400/10 px-1.5 py-0.5 rounded">T2V</span>
-                        <div>
-                          <span className="text-sm text-zinc-200">Text-to-Video</span>
-                          <p className="text-[10px] text-zinc-500 mt-0.5">
-                            {settings.promptEnhancerEnabledT2V ? 'Prompts will be enhanced before T2V generation' : 'T2V prompts used as-is'}
-                          </p>
-                        </div>
-                      </div>
-                      <div className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
-                        settings.promptEnhancerEnabledT2V ? 'bg-blue-500' : 'bg-zinc-700'
-                      }`}>
-                        <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform pointer-events-none ${
-                          settings.promptEnhancerEnabledT2V ? 'translate-x-5' : 'translate-x-0'
-                        }`} />
-                      </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="password"
+                        value={promptEnhancerApiKeyInput}
+                        onChange={(e) => setPromptEnhancerApiKeyInput(e.target.value)}
+                        placeholder="sk-... (leave empty for local servers)"
+                        className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500"
+                      />
+                      <Button
+                        size="sm"
+                        onClick={handleSavePromptEnhancerApiKey}
+                        disabled={promptEnhancerKeySaving || !promptEnhancerApiKeyInput.trim()}
+                        className="bg-blue-600 hover:bg-blue-500 text-white text-xs"
+                      >
+                        {promptEnhancerKeySaving ? 'Saving...' : 'Save'}
+                      </Button>
                     </div>
+                  )}
+                  <p className="text-[10px] text-zinc-500">
+                    Many local servers (LM Studio, Ollama) need no key. Stored server-side and sent as a Bearer token.
+                  </p>
+                </div>
 
-                    {/* I2V Toggle */}
-                    <div
-                      className="flex items-center justify-between bg-zinc-800/50 rounded-lg px-4 py-3 border border-zinc-700/50 cursor-pointer"
-                      onClick={() => handleTogglePromptEnhancer('i2v')}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs font-semibold text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded">I2V</span>
-                        <div>
-                          <span className="text-sm text-zinc-200">Image-to-Video</span>
-                          <p className="text-[10px] text-zinc-500 mt-0.5">
-                            {settings.promptEnhancerEnabledI2V ? 'Prompts will be enhanced before I2V generation' : 'I2V prompts used as-is'}
-                          </p>
-                        </div>
-                      </div>
-                      <div className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
-                        settings.promptEnhancerEnabledI2V ? 'bg-blue-500' : 'bg-zinc-700'
-                      }`}>
-                        <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform pointer-events-none ${
-                          settings.promptEnhancerEnabledI2V ? 'translate-x-5' : 'translate-x-0'
-                        }`} />
-                      </div>
+                {/* Test connection */}
+                <div className="space-y-2">
+                  <Button
+                    size="sm"
+                    onClick={handleTestPromptEnhancer}
+                    disabled={promptEnhancerTesting || !settings.promptEnhancerBaseUrl.trim()}
+                    className="w-full bg-zinc-700 hover:bg-zinc-600 text-white text-xs"
+                  >
+                    {promptEnhancerTesting ? 'Testing connection...' : 'Test Connection'}
+                  </Button>
+                  {promptEnhancerTestResult && (
+                    <div className={`flex items-start gap-2 rounded-lg px-3 py-2 text-xs ${
+                      promptEnhancerTestResult.ok
+                        ? 'bg-emerald-500/5 border border-emerald-500/20 text-emerald-300'
+                        : 'bg-red-500/5 border border-red-500/20 text-red-300'
+                    }`}>
+                      {promptEnhancerTestResult.ok ? <Check className="h-4 w-4 mt-0.5 flex-shrink-0" /> : <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />}
+                      <span className="leading-relaxed break-words">{promptEnhancerTestResult.message}</span>
                     </div>
-                  </>
-                )}
+                  )}
+                </div>
+
+                <div className="h-px bg-zinc-800 my-1" />
+
+                {/* T2V Toggle */}
+                <div
+                  className="flex items-center justify-between bg-zinc-800/50 rounded-lg px-4 py-3 border border-zinc-700/50 cursor-pointer"
+                  onClick={() => handleTogglePromptEnhancer('t2v')}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-semibold text-blue-400 bg-blue-400/10 px-1.5 py-0.5 rounded">T2V</span>
+                    <div>
+                      <span className="text-sm text-zinc-200">Text-to-Video</span>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">
+                        {settings.promptEnhancerEnabledT2V ? 'Prompts will be enhanced before T2V generation' : 'T2V prompts used as-is'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+                    settings.promptEnhancerEnabledT2V ? 'bg-blue-500' : 'bg-zinc-700'
+                  }`}>
+                    <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform pointer-events-none ${
+                      settings.promptEnhancerEnabledT2V ? 'translate-x-5' : 'translate-x-0'
+                    }`} />
+                  </div>
+                </div>
+
+                {/* I2V Toggle */}
+                <div
+                  className="flex items-center justify-between bg-zinc-800/50 rounded-lg px-4 py-3 border border-zinc-700/50 cursor-pointer"
+                  onClick={() => handleTogglePromptEnhancer('i2v')}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-semibold text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded">I2V</span>
+                    <div>
+                      <span className="text-sm text-zinc-200">Image-to-Video</span>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">
+                        {settings.promptEnhancerEnabledI2V ? 'Prompts will be enhanced before I2V generation' : 'I2V prompts used as-is'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+                    settings.promptEnhancerEnabledI2V ? 'bg-blue-500' : 'bg-zinc-700'
+                  }`}>
+                    <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform pointer-events-none ${
+                      settings.promptEnhancerEnabledI2V ? 'translate-x-5' : 'translate-x-0'
+                    }`} />
+                  </div>
+                </div>
               </div>
             </>
           )}

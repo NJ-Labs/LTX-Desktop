@@ -26,7 +26,8 @@ from server_utils.media_validation import (
     validate_audio_file,
     validate_image_file,
 )
-from services.interfaces import LTXAPIClient, VideoPipelineModelType
+from server_utils.gpu_errors import normalize_generation_error
+from services.interfaces import LTXAPIClient, TaskRunner, VideoPipelineModelType
 from state.app_state_types import AppState
 from state.app_settings import should_video_generate_with_ltx_api
 
@@ -64,6 +65,7 @@ class VideoGenerationHandler(StateHandlerBase):
         pipelines_handler: PipelinesHandler,
         text_handler: TextHandler,
         ltx_api_client: LTXAPIClient,
+        task_runner: TaskRunner,
         config: RuntimeConfig,
     ) -> None:
         super().__init__(state, lock, config)
@@ -71,6 +73,44 @@ class VideoGenerationHandler(StateHandlerBase):
         self._pipelines = pipelines_handler
         self._text = text_handler
         self._ltx_api_client = ltx_api_client
+        self._task_runner = task_runner
+
+    def generate_async(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
+        """Non-blocking entry point: reserve the slot, run generation in the
+        background, and return immediately so the HTTP request is never held
+        open for the (potentially many-minute) generation — which is what a
+        reverse proxy would otherwise kill with a 504. The frontend polls
+        ``/api/generation/progress`` for completion and the result.
+
+        When the task runner executes inline (tests), the job has already
+        finished by the time we snapshot the outcome, so a synchronous result
+        is returned for backward compatibility.
+        """
+        generation_id = self._make_generation_id()
+        if not self._generation.try_reserve_generation(generation_id):
+            raise HTTPError(409, "Generation already in progress")
+
+        self._task_runner.run_background(
+            lambda: self._run_generation(req),
+            task_name="video-generation",
+        )
+
+        kind, payload, status_code = self._generation.get_async_outcome()
+        if kind == "complete":
+            return GenerateVideoResponse(status="complete", video_path=payload if isinstance(payload, str) else None)
+        if kind == "cancelled":
+            return GenerateVideoResponse(status="cancelled")
+        if kind == "error":
+            raise HTTPError(status_code, str(payload) if payload else "Generation failed")
+        return GenerateVideoResponse(status="started")
+
+    def _run_generation(self, req: GenerateVideoRequest) -> None:
+        try:
+            self.generate(req)
+        except HTTPError as exc:
+            self._generation.fail_generation(normalize_generation_error(exc.detail), status_code=exc.status_code)
+        except Exception as exc:  # noqa: BLE001 - surface failure to async pollers
+            self._generation.fail_generation(normalize_generation_error(exc))
 
     def generate(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
         if should_video_generate_with_ltx_api(
@@ -80,8 +120,8 @@ class VideoGenerationHandler(StateHandlerBase):
         ):
             return self._generate_forced_api(req)
 
-        if self._generation.is_generation_running():
-            raise HTTPError(409, "Generation already in progress")
+        if self._generation.is_generation_cancelled():
+            raise RuntimeError("Generation was cancelled")
 
         resolution = req.resolution
 
@@ -148,11 +188,11 @@ class VideoGenerationHandler(StateHandlerBase):
             return GenerateVideoResponse(status="complete", video_path=output_path)
 
         except Exception as e:
-            self._generation.fail_generation(str(e))
             if "cancelled" in str(e).lower():
+                self._generation.cancel_generation()
                 logger.info("Generation cancelled by user")
                 return GenerateVideoResponse(status="cancelled")
-
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
 
     def generate_video(
@@ -350,10 +390,11 @@ class VideoGenerationHandler(StateHandlerBase):
             return GenerateVideoResponse(status="complete", video_path=str(output_path))
 
         except Exception as e:
-            self._generation.fail_generation(str(e))
             if "cancelled" in str(e).lower():
+                self._generation.cancel_generation()
                 logger.info("Generation cancelled by user")
                 return GenerateVideoResponse(status="cancelled")
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
         finally:
             self._text.clear_api_embeddings()
@@ -401,9 +442,6 @@ class VideoGenerationHandler(StateHandlerBase):
         return self.config.outputs_dir / f"ltx2_video_{timestamp}_{self._make_generation_id()}.mp4"
 
     def _generate_forced_api(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
-        if self._generation.is_generation_running():
-            raise HTTPError(409, "Generation already in progress")
-
         generation_id = self._make_generation_id()
         self._generation.start_api_generation(generation_id)
 
@@ -538,13 +576,14 @@ class VideoGenerationHandler(StateHandlerBase):
             self._generation.complete_generation(str(output_path))
             return GenerateVideoResponse(status="complete", video_path=str(output_path))
         except HTTPError as e:
-            self._generation.fail_generation(e.detail)
+            self._generation.fail_generation(e.detail, status_code=e.status_code)
             raise
         except Exception as e:
-            self._generation.fail_generation(str(e))
             if "cancelled" in str(e).lower():
+                self._generation.cancel_generation()
                 logger.info("Generation cancelled by user")
                 return GenerateVideoResponse(status="cancelled")
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
 
     def _write_forced_api_video(self, video_bytes: bytes) -> Path:

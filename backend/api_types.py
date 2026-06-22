@@ -113,6 +113,14 @@ class GenerationProgressResponse(BaseModel):
     progress: int
     currentStep: int | None
     totalSteps: int | None
+    # Result payload, populated once the generation reaches a terminal state so
+    # async (non-blocking) clients can fetch the output by polling alone.
+    videoPath: str | None = None
+    imagePaths: list[str] | None = None
+    error: str | None = None
+    # Milliseconds since the backend last updated generation progress. Lets the
+    # UI detect a stalled backend ("live-check") during long generations.
+    heartbeatAgeMs: int | None = None
 
 
 class ModelInfo(BaseModel):

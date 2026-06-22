@@ -11,8 +11,8 @@ function getHumanMessage(error: string): string {
   if (lower.includes('409') || lower.includes('already')) {
     return 'A generation is already in progress. Please wait for it to finish or cancel it.'
   }
-  if (lower.includes('cuda') || lower.includes('out of memory') || lower.includes('oom')) {
-    return 'The GPU ran out of memory. Try a lower resolution or shorter duration.'
+  if (lower.includes('cuda') || lower.includes('out of memory') || lower.includes('oom') || lower.includes('gpu_out_of_memory')) {
+    return 'The GPU ran out of memory. Try a lower resolution or a shorter duration, or close other GPU-heavy apps.'
   }
   if ((lower.includes('model') && (lower.includes('not found') || lower.includes('load')))) {
     return 'The AI model failed to load. Please check your setup and try again.'

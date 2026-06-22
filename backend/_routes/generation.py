@@ -21,8 +21,13 @@ def route_generate(
     req: GenerateVideoRequest,
     handler: AppHandler = Depends(get_state_service),
 ) -> GenerateVideoResponse:
-    """POST /api/generate — video generation from JSON body."""
-    return handler.video_generation.generate(req)
+    """POST /api/generate — video generation from JSON body.
+
+    Non-blocking: schedules generation in the background and returns immediately
+    (status "started") so long generations cannot trip a reverse-proxy 504. The
+    client polls /api/generation/progress for completion and the result.
+    """
+    return handler.video_generation.generate_async(req)
 
 
 @router.post("/generate/cancel", response_model=CancelResponse)

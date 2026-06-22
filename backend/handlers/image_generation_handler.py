@@ -15,7 +15,8 @@ from api_types import GenerateImageRequest, GenerateImageResponse
 from handlers.base import StateHandlerBase
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
-from services.interfaces import ZitAPIClient
+from server_utils.gpu_errors import normalize_generation_error
+from services.interfaces import TaskRunner, ZitAPIClient
 from state.app_state_types import AppState
 
 if TYPE_CHECKING:
@@ -33,15 +34,47 @@ class ImageGenerationHandler(StateHandlerBase):
         pipelines_handler: PipelinesHandler,
         config: RuntimeConfig,
         zit_api_client: ZitAPIClient,
+        task_runner: TaskRunner,
     ) -> None:
         super().__init__(state, lock, config)
         self._generation = generation_handler
         self._pipelines = pipelines_handler
         self._zit_api_client = zit_api_client
+        self._task_runner = task_runner
+
+    def generate_async(self, req: GenerateImageRequest) -> GenerateImageResponse:
+        """Non-blocking image generation entry point. See
+        ``VideoGenerationHandler.generate_async`` for the rationale.
+        """
+        generation_id = uuid.uuid4().hex[:8]
+        if not self._generation.try_reserve_generation(generation_id):
+            raise HTTPError(409, "Generation already in progress")
+
+        self._task_runner.run_background(
+            lambda: self._run_generation(req),
+            task_name="image-generation",
+        )
+
+        kind, payload, status_code = self._generation.get_async_outcome()
+        if kind == "complete":
+            return GenerateImageResponse(status="complete", image_paths=payload if isinstance(payload, list) else None)
+        if kind == "cancelled":
+            return GenerateImageResponse(status="cancelled")
+        if kind == "error":
+            raise HTTPError(status_code, str(payload) if payload else "Image generation failed")
+        return GenerateImageResponse(status="started")
+
+    def _run_generation(self, req: GenerateImageRequest) -> None:
+        try:
+            self.generate(req)
+        except HTTPError as exc:
+            self._generation.fail_generation(normalize_generation_error(exc.detail), status_code=exc.status_code)
+        except Exception as exc:  # noqa: BLE001 - surface failure to async pollers
+            self._generation.fail_generation(normalize_generation_error(exc))
 
     def generate(self, req: GenerateImageRequest) -> GenerateImageResponse:
-        if self._generation.is_generation_running():
-            raise HTTPError(409, "Generation already in progress")
+        if self._generation.is_generation_cancelled():
+            raise RuntimeError("Generation was cancelled")
 
         width = (req.width // 16) * 16
         height = (req.height // 16) * 16
@@ -79,10 +112,11 @@ class ImageGenerationHandler(StateHandlerBase):
             self._generation.complete_generation(output_paths)
             return GenerateImageResponse(status="complete", image_paths=output_paths)
         except Exception as e:
-            self._generation.fail_generation(str(e))
             if "cancelled" in str(e).lower():
+                self._generation.cancel_generation()
                 logger.info("Image generation cancelled by user")
                 return GenerateImageResponse(status="cancelled")
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
 
     def generate_image(
@@ -184,13 +218,14 @@ class ImageGenerationHandler(StateHandlerBase):
             self._generation.complete_generation([str(path) for path in output_paths])
             return GenerateImageResponse(status="complete", image_paths=[str(path) for path in output_paths])
         except HTTPError as e:
-            self._generation.fail_generation(e.detail)
+            self._generation.fail_generation(e.detail, status_code=e.status_code)
             raise
         except Exception as e:
-            self._generation.fail_generation(str(e))
             if "cancelled" in str(e).lower():
+                self._generation.cancel_generation()
                 for path in output_paths:
                     path.unlink(missing_ok=True)
                 logger.info("Image generation cancelled by user")
                 return GenerateImageResponse(status="cancelled")
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e

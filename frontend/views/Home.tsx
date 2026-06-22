@@ -108,7 +108,6 @@ function ProjectCard({ project, onOpen, onDelete, onEdit }: {
 
 export function Home() {
   const { projects, createProject, deleteProject, updateProject, openProject, openPlayground } = useProjects()
-  const { preload, isPreloading } = usePreloadModels()
   const [isCreating, setIsCreating] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
 
@@ -149,15 +148,6 @@ export function Home() {
             >
               <Sparkles className="h-4 w-4" />
               Playground
-            </button>
-            <button
-              onClick={() => void preload()}
-              disabled={isPreloading}
-              title="Load and warm all available local models into memory"
-              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isPreloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
-              {isPreloading ? 'Preloading…' : 'Preload models'}
             </button>
           </div>
           

@@ -7,6 +7,7 @@ This repository now includes a backend runtime image for self-hosted, offline de
 - Runs the Python FastAPI backend directly.
 - Accepts a mounted models directory through `--models-dir` or `LTX_MODELS_DIR`.
 - Forces offline mode so runtime downloads fail fast instead of reaching out to Hugging Face.
+- Supports `--online` to opt out of those offline defaults when the container should be allowed to download models at runtime.
 - Preloads required local models at container startup.
 - Starts even when mounted models are missing, so the UI can show model health warnings instead of hard-failing startup.
 
@@ -41,6 +42,7 @@ All CLI options accept both `--flag value` and `--flag=value` forms. Boolean fla
 
 | Option | Enable flag | Environment variable | Default |
 | --- | --- | --- | --- |
+| Run in online mode | `--online` | `LTX_OFFLINE=0` | disabled |
 | Preload models on startup | `--preload-models` | `LTX_PRELOAD_MODELS` | enabled |
 | Torch compile (experimental) | `--torch-compile` | `LTX_TORCH_COMPILE` | disabled |
 
@@ -86,7 +88,7 @@ Depending on your settings and flows, you may also need:
 
 ## Runtime Behavior
 
-- `LTX_OFFLINE=1` is enabled by default in the entrypoint.
+- `LTX_OFFLINE=1` is enabled by default in the entrypoint. Pass `--online` or set `LTX_OFFLINE=0` to allow runtime downloads.
 - `LTX_PRELOAD_MODELS=1` is enabled by default in the entrypoint. Disable it with `LTX_PRELOAD_MODELS=0`.
 - `LTX_TORCH_COMPILE=0` is disabled by default in the entrypoint. Enable with `--torch-compile` or `LTX_TORCH_COMPILE=1`. Experimental: the first generation can take 5-10+ minutes to compile, then subsequent generations are faster.
 - `LTX_BLOCK_ON_STARTUP=1` is enabled by default in the entrypoint.

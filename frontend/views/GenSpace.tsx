@@ -3,7 +3,7 @@ import {
   Trash2, Download, Image, Video, X,
   Heart, Film, Volume2, VolumeX, Sparkles,
   Clock, Monitor, ChevronUp, Scissors, Music,
-  ChevronLeft, ChevronRight, Copy, Check, Layers
+  ChevronLeft, ChevronRight, Copy, Check, Layers, Loader2
 } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import type { GenSpaceRetakeSource } from '../contexts/ProjectContext'
@@ -14,6 +14,7 @@ import { useIcLora } from '../hooks/use-ic-lora'
 import type { ICLoraConditioningType } from '../components/ICLoraPanel'
 import type { Asset } from '../types/project'
 import { GenerationErrorDialog } from '../components/GenerationErrorDialog'
+import { HeavyGenerationWarningDialog } from '../components/HeavyGenerationWarningDialog'
 import { copyToAssetFolder } from '../lib/asset-copy'
 import { fileUrlToPath } from '../lib/url-to-path'
 import { pathToBrowserUrl } from '../lib/web-mode'
@@ -399,6 +400,8 @@ function PromptBar({
   onPromptChange,
   onGenerate,
   isGenerating,
+  onDiscard,
+  discardable,
   inputImage,
   onInputImageChange,
   inputAudio,
@@ -427,6 +430,8 @@ function PromptBar({
   onPromptChange: (prompt: string) => void
   onGenerate: () => void
   isGenerating: boolean
+  onDiscard?: () => void
+  discardable?: boolean
   canGenerate: boolean
   buttonLabel: string
   buttonIcon: React.ReactNode
@@ -888,24 +893,36 @@ function PromptBar({
                   : 'text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800'
               }`}
             >
-              <EnhanceIcon className={`h-4 w-4 ${isEnhancingPrompt ? 'animate-pulse' : ''}`} />
+              {isEnhancingPrompt
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <EnhanceIcon className="h-4 w-4" />}
             </button>
           </Tooltip>
         )}
 
-        {/* Generate button */}
-        <button
-          onClick={onGenerate}
-          disabled={isGenerating || !canGenerate}
-          className={`flex items-center gap-1.5 ml-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all flex-shrink-0 ${
-            isGenerating || !canGenerate
-              ? 'bg-zinc-700 text-zinc-500 cursor-not-allowed'
-              : 'bg-white text-black hover:bg-zinc-200'
-          }`}
-        >
-          <span className={isGenerating ? 'animate-pulse' : ''}>{buttonIcon}</span>
-          {buttonLabel}
-        </button>
+        {/* Generate / Discard button */}
+        {isGenerating && discardable && onDiscard ? (
+          <button
+            onClick={onDiscard}
+            className="flex items-center gap-1.5 ml-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all flex-shrink-0 bg-red-600 text-white hover:bg-red-500"
+          >
+            <X className="h-3.5 w-3.5" />
+            Discard
+          </button>
+        ) : (
+          <button
+            onClick={onGenerate}
+            disabled={isGenerating || !canGenerate}
+            className={`flex items-center gap-1.5 ml-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all flex-shrink-0 ${
+              isGenerating || !canGenerate
+                ? 'bg-zinc-700 text-zinc-500 cursor-not-allowed'
+                : 'bg-white text-black hover:bg-zinc-200'
+            }`}
+          >
+            <span className={isGenerating ? 'animate-pulse' : ''}>{buttonIcon}</span>
+            {buttonLabel}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -1030,6 +1047,11 @@ export function GenSpace() {
   const [settings, setSettings] = useState(() => ({ ...DEFAULT_VIDEO_SETTINGS }))
   const [batchCount, setBatchCount] = useState(1)
   const [batchRemaining, setBatchRemaining] = useState(0)
+  // Set when the user discards an in-flight generation so the batch loop stops
+  // queuing the next inline item.
+  const batchAbortRef = useRef(false)
+  // Confirmation gate for extremely GPU-demanding local video requests.
+  const [showHeavyWarning, setShowHeavyWarning] = useState(false)
   const applyForcedVideoSettings = useCallback(
     (next: { model: string; duration: number; videoResolution: string; fps: number; audio: boolean; aspectRatio: string; imageResolution: string; variations: number }) => {
       if (!shouldVideoGenerateWithLtxApi || mode !== 'video') return next
@@ -1050,6 +1072,7 @@ export function GenSpace() {
     imagePaths,
     error,
     reset,
+    cancel,
   } = useGeneration()
 
   const {
@@ -1427,7 +1450,26 @@ export function GenSpace() {
       })()
     }
   }, [imageUrls, imagePaths, currentProjectId, isGenerating])
-  
+
+  // Local 1080p+ videos longer than 30s are extremely GPU-demanding and slow.
+  // Cloud (forced-API) generations run remotely, so the warning only applies to
+  // local generation.
+  const HEAVY_LOCAL_RESOLUTIONS = ['1080p', '1440p', '2160p']
+  const isHeavyVideoRequest =
+    mode === 'video' &&
+    !shouldVideoGenerateWithLtxApi &&
+    HEAVY_LOCAL_RESOLUTIONS.includes(settings.videoResolution) &&
+    settings.duration > 30
+  const heavyConfirmRef = useRef(false)
+
+  // Discard an in-flight generation: stop the backend job and prevent the batch
+  // loop from queuing the next inline item.
+  const handleDiscard = () => {
+    batchAbortRef.current = true
+    void cancel()
+    setBatchRemaining(0)
+  }
+
   const handleGenerate = async () => {
     if (mode === 'ic-lora') {
       if (!prompt.trim() || !icLoraInput.videoPath || !icLoraInput.ready) return
@@ -1474,9 +1516,18 @@ export function GenSpace() {
     // Save the prompt before generation starts
     setLastPrompt(prompt)
 
+    // Gate extremely GPU-demanding local video requests behind a confirmation.
+    if (isHeavyVideoRequest && !heavyConfirmRef.current) {
+      setShowHeavyWarning(true)
+      return
+    }
+    heavyConfirmRef.current = false
+
     // Run the same prompt N times sequentially (batch generation)
+    batchAbortRef.current = false
     const totalBatch = batchCount
     for (let i = totalBatch; i >= 1; i--) {
+      if (batchAbortRef.current) break
       setBatchRemaining(i)
 
       if (mode === 'image') {
@@ -1862,6 +1913,8 @@ export function GenSpace() {
           onPromptChange={setPrompt}
           onGenerate={handleGenerate}
           isGenerating={promptGenerating}
+          onDiscard={handleDiscard}
+          discardable={!isRetakeMode && !isIcLoraMode}
           canGenerate={canSubmit}
           buttonLabel={promptButtonLabel}
           buttonIcon={promptButtonIcon}
@@ -1983,6 +2036,19 @@ export function GenSpace() {
               resetRetake()
               resetIcLora()
             }
+          }}
+        />
+      )}
+
+      {showHeavyWarning && (
+        <HeavyGenerationWarningDialog
+          resolution={settings.videoResolution}
+          duration={settings.duration}
+          onCancel={() => setShowHeavyWarning(false)}
+          onConfirm={() => {
+            setShowHeavyWarning(false)
+            heavyConfirmRef.current = true
+            void handleGenerate()
           }}
         />
       )}

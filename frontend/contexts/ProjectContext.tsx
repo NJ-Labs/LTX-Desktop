@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import type { Project, Asset, AssetTake, ViewType, ProjectTab, Timeline, ProjectDetails } from '../types/project'
 import { createDefaultTimeline } from '../types/project'
 import { logger } from '../lib/logger'
-import { isWebMode } from '../lib/web-mode'
+import { isWebMode, pathToBrowserUrl } from '../lib/web-mode'
 import { loadLibrary, saveLibrary } from '../lib/library'
 
 interface ProjectContextType {
@@ -118,10 +118,11 @@ function migrateProject(project: Project): Project {
   return project
 }
 
-// Rebuild a file:// URL from a filesystem path
+// Rebuild a playable URL from a filesystem path. In web/self-hosted mode this
+// produces a backend `/media?path=` URL (the browser cannot read `file://`);
+// in desktop mode it produces a `file://` URL.
 function pathToFileUrl(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/')
-  return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
+  return pathToBrowserUrl(filePath)
 }
 
 // Check if a path looks like a real filesystem path (not just a filename)
@@ -131,17 +132,27 @@ function isRealPath(p: string): boolean {
   return p.includes('/') || p.includes('\\') || /^[A-Za-z]:/.test(p)
 }
 
-// Recover broken blob URLs by rebuilding file:// URLs from stored paths
+// A persisted URL is unplayable when it is a dead session blob: URL, or — in
+// web/self-hosted mode — a file:// URL the browser cannot read. Such URLs are
+// rebuilt from the stored filesystem path via pathToFileUrl().
+function isUnplayableUrl(url: string | undefined): boolean {
+  if (!url) return false
+  if (url.startsWith('blob:')) return true
+  if (isWebMode() && url.startsWith('file:')) return true
+  return false
+}
+
+// Recover broken asset URLs by rebuilding playable URLs from stored paths.
 function recoverAssetUrls(project: Project): Project {
   let changed = false
   const fixedAssets = project.assets.map(asset => {
-    // If the URL is a blob: URL and we have a real file path, recover it
-    if (asset.url && asset.url.startsWith('blob:') && isRealPath(asset.path)) {
+    // If the URL is unplayable and we have a real file path, recover it
+    if (isUnplayableUrl(asset.url) && isRealPath(asset.path)) {
       changed = true
       const fixedUrl = pathToFileUrl(asset.path)
       const fixedTakes = asset.takes?.map(t => ({
         ...t,
-        url: t.url.startsWith('blob:') && isRealPath(t.path) ? pathToFileUrl(t.path) : t.url
+        url: isUnplayableUrl(t.url) && isRealPath(t.path) ? pathToFileUrl(t.path) : t.url
       }))
       return { ...asset, url: fixedUrl, takes: fixedTakes || asset.takes }
     }
@@ -154,7 +165,7 @@ function recoverAssetUrls(project: Project): Project {
   const fixedTimelines = project.timelines?.map(tl => ({
     ...tl,
     clips: tl.clips?.map(clip => {
-      if (clip.asset?.url?.startsWith('blob:') && isRealPath(clip.asset.path)) {
+      if (clip.asset && isUnplayableUrl(clip.asset.url) && isRealPath(clip.asset.path)) {
         return { ...clip, asset: { ...clip.asset, url: pathToFileUrl(clip.asset.path) } }
       }
       return clip

@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from 'react'
 import type { GenerationSettings } from '../components/SettingsPanel'
 import { backendFetch } from '../lib/backend'
+import { HEARTBEAT_STALL_WARNING_MS, waitForGenerationTerminal } from '../lib/generation-poll'
 import { pathToBrowserUrl } from '../lib/web-mode'
 import { useAppSettings } from '../contexts/AppSettingsContext'
 
@@ -23,6 +24,10 @@ interface GenerationProgress {
   progress: number
   currentStep: number | null
   totalSteps: number | null
+  videoPath?: string | null
+  imagePaths?: string[] | null
+  error?: string | null
+  heartbeatAgeMs?: number | null
 }
 
 interface UseGenerationReturn extends GenerationState {
@@ -212,22 +217,58 @@ export function useGeneration(): UseGenerationReturn {
       
       progressInterval = setInterval(pollProgress, 500)
 
-      // Start generation (HTTP POST - synchronous, returns when done)
+      // Start generation. The backend schedules the work in the background and
+      // returns immediately with status "started" (non-blocking) so a long
+      // generation can't trip a reverse-proxy 504. Completion + result are then
+      // discovered by polling /api/generation/progress.
       const response = await backendFetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: abortControllerRef.current.signal,
       })
-      shouldApplyPollingUpdates = false
 
       if (!response.ok) {
+        shouldApplyPollingUpdates = false
         const errorText = await response.text()
         throw new Error(errorText || 'Generation failed')
       }
 
-      const result = await response.json()
-      
+      let result = await response.json()
+
+      if (result.status === 'started') {
+        // Switch from the interval-based display poll to a single loop that
+        // both updates the UI and waits for a terminal state.
+        shouldApplyPollingUpdates = false
+        if (progressInterval) {
+          clearInterval(progressInterval)
+          progressInterval = null
+        }
+        const terminal = await waitForGenerationTerminal(
+          abortControllerRef.current.signal,
+          (data) => {
+            const stalled =
+              typeof data.heartbeatAgeMs === 'number' && data.heartbeatAgeMs > HEARTBEAT_STALL_WARNING_MS
+            setState(prev => ({
+              ...prev,
+              progress: data.status === 'complete' ? 95 : data.progress,
+              statusMessage: stalled
+                ? 'Still working — long generations can take several minutes...'
+                : getPhaseMessage(data.phase, data.currentStep, data.totalSteps),
+            }))
+          },
+        )
+        if (terminal.status === 'complete') {
+          result = { status: 'complete', video_path: terminal.videoPath ?? null }
+        } else if (terminal.status === 'cancelled') {
+          result = { status: 'cancelled' }
+        } else {
+          result = { status: 'error', error: terminal.error || 'Generation failed' }
+        }
+      } else {
+        shouldApplyPollingUpdates = false
+      }
+
       if (result.status === 'complete' && result.video_path) {
         resultVideoPath = result.video_path
         setState({
@@ -405,8 +446,41 @@ export function useGeneration(): UseGenerationReturn {
         throw new Error(errorText || 'Image generation failed')
       }
 
-      const result = await response.json()
-      
+      let result = await response.json()
+
+      if (result.status === 'started') {
+        // Non-blocking path: wait for completion by polling progress.
+        const terminal = await waitForGenerationTerminal(
+          abortControllerRef.current.signal,
+          (data) => {
+            const currentImage = data.currentStep || 0
+            const totalImages = data.totalSteps || numImages
+            const stalled =
+              typeof data.heartbeatAgeMs === 'number' && data.heartbeatAgeMs > HEARTBEAT_STALL_WARNING_MS
+            setState(prev => ({
+              ...prev,
+              progress: data.status === 'complete' ? 95 : data.progress,
+              statusMessage: stalled
+                ? 'Still working — this can take a while...'
+                : data.phase === 'loading_model'
+                  ? 'Loading Z-Image Turbo model...'
+                  : data.phase === 'inference'
+                    ? numImages > 1
+                      ? `Generating image ${currentImage + 1}/${totalImages}...`
+                      : 'Generating image...'
+                    : 'Generating...',
+            }))
+          },
+        )
+        if (terminal.status === 'complete') {
+          result = { status: 'complete', image_paths: terminal.imagePaths ?? [] }
+        } else if (terminal.status === 'cancelled') {
+          result = { status: 'cancelled' }
+        } else {
+          result = { status: 'error', error: terminal.error || 'Image generation failed' }
+        }
+      }
+
       if (result.status === 'complete') {
         // Handle both new format (image_paths array) and old format (single image_path)
         let rawPaths: string[] = []

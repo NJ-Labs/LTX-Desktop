@@ -35,8 +35,8 @@ export function ModelStatusDialog({ isOpen, state, onClose, onOpenSettings }: Mo
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-zinc-100 shadow-2xl">
-        <div className="flex items-start justify-between gap-4">
+      <div className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl">
+        <div className="flex items-start justify-between gap-4 p-5 pb-0">
           <div className="flex items-start gap-3">
             <StatusIcon level={state.level} />
             <div>
@@ -54,7 +54,8 @@ export function ModelStatusDialog({ isOpen, state, onClose, onOpenSettings }: Mo
           </button>
         </div>
 
-        <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
+        <div className="flex-1 overflow-y-auto px-5 pt-4">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
           <div className="flex items-center justify-between text-sm">
             <span className="text-zinc-400">Required models</span>
             <span className="font-medium text-zinc-100">
@@ -153,8 +154,9 @@ export function ModelStatusDialog({ isOpen, state, onClose, onOpenSettings }: Mo
             {preloadError}
           </div>
         )}
+        </div>
 
-        <div className="mt-5 flex items-center justify-end gap-2">
+        <div className="mt-5 flex items-center justify-end gap-2 p-5 pt-0">
           <Button variant="outline" onClick={onClose}>Dismiss</Button>
           <Button variant="outline" onClick={() => void preload()} disabled={preloadBusy}>
             {preloadBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}

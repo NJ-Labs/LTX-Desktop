@@ -9,6 +9,7 @@ vLLM), this feature also works in offline / air-gapped deployments.
 from __future__ import annotations
 
 import logging
+import re
 from threading import RLock
 from typing import TYPE_CHECKING
 
@@ -72,8 +73,19 @@ _IMAGE_SYSTEM_PROMPT = (
 )
 
 
+class _OpenAIContentPart(BaseModel):
+    type: str | None = None
+    text: str | None = None
+
+
 class _OpenAIMessage(BaseModel):
-    content: str | None = None
+    # Most servers return a plain string, but OpenAI-compatible endpoints may
+    # also return a list of typed content parts (e.g. ``[{"type": "text",
+    # "text": "..."}]``). Reasoning models additionally expose their chain of
+    # thought in ``reasoning_content`` / ``reasoning``.
+    content: str | list[_OpenAIContentPart] | None = None
+    reasoning_content: str | None = None
+    reasoning: str | None = None
 
 
 class _OpenAIChoice(BaseModel):
@@ -119,12 +131,36 @@ def _strip_wrapping_quotes(text: str) -> str:
     return stripped
 
 
+# Reasoning models (DeepSeek-R1, Qwen QwQ, etc.) wrap their chain of thought in
+# a leading ``<think>...</think>`` block within the message content. We keep only
+# the answer that follows it. A dangling ``<think>`` with no closing tag means the
+# whole content is reasoning and should be discarded.
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+_OPEN_THINK_RE = re.compile(r"<think\b[^>]*>.*\Z", re.IGNORECASE | re.DOTALL)
+
+
+def _strip_reasoning_blocks(text: str) -> str:
+    without_closed = _THINK_BLOCK_RE.sub("", text)
+    without_dangling = _OPEN_THINK_RE.sub("", without_closed)
+    return without_dangling.strip()
+
+
+def _message_content_text(message: _OpenAIMessage) -> str:
+    content = message.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(part.text or "" for part in content)
+    return ""
+
+
 def _extract_openai_text(payload: object) -> str:
     try:
         parsed = _OpenAIChatResponse.model_validate(payload)
     except ValidationError as exc:
         raise HTTPError(502, "PROMPT_ENHANCER_PARSE_ERROR") from exc
-    content = parsed.choices[0].message.content or ""
+    message = parsed.choices[0].message
+    content = _strip_reasoning_blocks(_message_content_text(message))
     return _strip_wrapping_quotes(content)
 
 
@@ -150,7 +186,7 @@ class PromptEnhancerHandler(StateHandlerBase):
             "model": model or "local-model",
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 512,
+            "max_tokens": 16384,
             "stream": False,
         }
 

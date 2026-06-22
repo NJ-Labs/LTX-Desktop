@@ -25,6 +25,8 @@ export interface AppSettings {
   promptEnhancerEnabledT2V: boolean
   promptEnhancerEnabledI2V: boolean
   promptEnhancerBaseUrl: string
+  promptEnhancerModel: string
+  hasPromptEnhancerApiKey: boolean
   seedLocked: boolean
   lockedSeed: number
   modelsDir: string
@@ -48,6 +50,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   promptEnhancerEnabledT2V: false,
   promptEnhancerEnabledI2V: false,
   promptEnhancerBaseUrl: '',
+  promptEnhancerModel: '',
+  hasPromptEnhancerApiKey: false,
   seedLocked: false,
   lockedSeed: 42,
   modelsDir: '',
@@ -66,6 +70,7 @@ interface AppSettingsContextValue {
   saveLtxApiKey: (value: string) => Promise<void>
   saveFalApiKey: (value: string) => Promise<void>
   saveGeminiApiKey: (value: string) => Promise<void>
+  savePromptEnhancerApiKey: (value: string) => Promise<void>
   forceApiGenerations: boolean
   offlineMode: boolean
   serverDataDir: string
@@ -101,6 +106,8 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     promptEnhancerEnabledT2V: data.promptEnhancerEnabledT2V ?? DEFAULT_APP_SETTINGS.promptEnhancerEnabledT2V,
     promptEnhancerEnabledI2V: data.promptEnhancerEnabledI2V ?? DEFAULT_APP_SETTINGS.promptEnhancerEnabledI2V,
     promptEnhancerBaseUrl: data.promptEnhancerBaseUrl ?? DEFAULT_APP_SETTINGS.promptEnhancerBaseUrl,
+    promptEnhancerModel: data.promptEnhancerModel ?? DEFAULT_APP_SETTINGS.promptEnhancerModel,
+    hasPromptEnhancerApiKey: data.hasPromptEnhancerApiKey ?? DEFAULT_APP_SETTINGS.hasPromptEnhancerApiKey,
     seedLocked: data.seedLocked ?? DEFAULT_APP_SETTINGS.seedLocked,
     lockedSeed: data.lockedSeed ?? DEFAULT_APP_SETTINGS.lockedSeed,
     modelsDir: data.modelsDir ?? DEFAULT_APP_SETTINGS.modelsDir,
@@ -240,7 +247,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     if (!isLoaded || backendProcessStatus !== 'alive') return
     const syncTimer = setTimeout(async () => {
       try {
-        const { hasLtxApiKey: _a, hasFalApiKey: _b, hasGeminiApiKey: _c, modelsDir: _d, ...syncPayload } = settings
+        const { hasLtxApiKey: _a, hasFalApiKey: _b, hasGeminiApiKey: _c, modelsDir: _d, hasPromptEnhancerApiKey: _e, ...syncPayload } = settings
         await backendFetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -300,6 +307,19 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     await refreshSettings()
   }, [refreshSettings])
 
+  const savePromptEnhancerApiKey = useCallback(async (value: string) => {
+    const response = await backendFetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ promptEnhancerApiKey: value }),
+    })
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(detail || 'Failed to save Prompt Enhancer API key.')
+    }
+    await refreshSettings()
+  }, [refreshSettings])
+
   const shouldVideoGenerateWithLtxApi =
     !offlineMode && (forceApiGenerations || (settings.userPrefersLtxApiVideoGenerations && settings.hasLtxApiKey))
 
@@ -313,12 +333,13 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       saveLtxApiKey,
       saveFalApiKey,
       saveGeminiApiKey,
+      savePromptEnhancerApiKey,
       forceApiGenerations,
       offlineMode,
       serverDataDir,
       shouldVideoGenerateWithLtxApi,
     }),
-    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiKey, saveGeminiApiKey, saveLtxApiKey, serverDataDir, settings, shouldVideoGenerateWithLtxApi, updateSettings],
+    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiKey, saveGeminiApiKey, saveLtxApiKey, savePromptEnhancerApiKey, serverDataDir, settings, shouldVideoGenerateWithLtxApi, updateSettings],
   )
 
   return <AppSettingsContext.Provider value={contextValue}>{children}</AppSettingsContext.Provider>

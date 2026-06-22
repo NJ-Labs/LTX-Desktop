@@ -137,6 +137,7 @@ class GenerationProgress:
     progress: float
     current_step: int | None
     total_steps: int | None
+    updated_at: float = 0.0
 
 
 @dataclass
@@ -155,6 +156,7 @@ class GenerationComplete:
 class GenerationError:
     id: str
     error: str
+    status_code: int = 500
 
 
 @dataclass
@@ -227,3 +229,7 @@ class AppState:
     startup: StartupState
     app_settings: AppSettings
     completed_download_sessions: dict[str, str] = field(default_factory=lambda: {})
+    # Bootstrap/queued marker for async (non-blocking) generation requests.
+    # Holds the generation lifecycle state before a device slot is claimed and
+    # acts as the authoritative record for failures that occur before start.
+    pending_generation: GenerationState | None = None
