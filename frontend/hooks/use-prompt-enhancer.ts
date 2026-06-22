@@ -5,10 +5,6 @@ import { logger } from '../lib/logger'
 
 export type EnhanceMode = 'video' | 'image'
 
-interface EnhanceResponse {
-  enhanced_prompt?: unknown
-}
-
 interface ErrorResponse {
   error?: unknown
   message?: unknown
@@ -30,14 +26,14 @@ export function usePromptEnhancer() {
   const isConfigured = settings.promptEnhancerBaseUrl.trim() !== ''
 
   const enhancePrompt = useCallback(
-    async (prompt: string, mode: EnhanceMode): Promise<string | null> => {
+    async (prompt: string, mode: EnhanceMode, onDelta?: (text: string) => void): Promise<string | null> => {
       const trimmed = prompt.trim()
       if (!trimmed || isEnhancing) return null
 
       setIsEnhancing(true)
       setError(null)
       try {
-        const response = await backendFetch('/api/prompt-enhancer/enhance', {
+        const response = await backendFetch('/api/prompt-enhancer/enhance/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ prompt: trimmed, mode }),
@@ -55,8 +51,27 @@ export function usePromptEnhancer() {
           throw new Error(detail)
         }
 
-        const data = (await response.json()) as EnhanceResponse
-        const enhanced = typeof data.enhanced_prompt === 'string' ? data.enhanced_prompt.trim() : ''
+        if (!response.body) throw new Error('Streaming response is unavailable')
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let enhanced = ''
+        while (true) {
+          const { value, done } = await reader.read()
+          buffer += decoder.decode(value, { stream: !done })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            if (!line.trim()) continue
+            const event = JSON.parse(line) as { delta?: unknown }
+            if (typeof event.delta === 'string') {
+              enhanced += event.delta
+              onDelta?.(enhanced)
+            }
+          }
+          if (done) break
+        }
+        enhanced = enhanced.trim()
         if (!enhanced) throw new Error('Empty response from prompt enhancer')
         return enhanced
       } catch (e) {

@@ -18,6 +18,7 @@ ModelFileType = Literal[
     "distilled_lora_384",
     "distilled_lora_384_v11",
     "ic_lora",
+    "ic_lora_ingredients",
     "depth_processor",
     "person_detector",
     "pose_processor",
@@ -206,7 +207,7 @@ class RetakeResponse(BaseModel):
 class IcLoraExtractResponse(BaseModel):
     conditioning: str
     original: str
-    conditioning_type: Literal["canny", "depth"]
+    conditioning_type: Literal["canny", "depth", "pose"]
     frame_time: float
 
 
@@ -343,7 +344,7 @@ class RetakeRequest(BaseModel):
 
 class IcLoraExtractRequest(BaseModel):
     video_path: str
-    conditioning_type: Literal["canny", "depth"] = "canny"
+    conditioning_type: Literal["canny", "depth", "pose"] = "canny"
     frame_time: float = 0
 
 
@@ -359,9 +360,11 @@ def _default_ic_lora_images() -> list[IcLoraImageInput]:
 
 class IcLoraGenerateRequest(BaseModel):
     video_path: str
-    conditioning_type: Literal["canny", "depth"]
+    adapter_type: Literal["union", "ingredients"] = "union"
+    conditioning_type: Literal["canny", "depth", "pose", "reference_sheet"] = "canny"
     prompt: NonEmptyPrompt
-    conditioning_strength: float = 1.0
+    conditioning_strength: float = Field(default=1.0, ge=0.0, le=2.0)
+    attention_strength: float = Field(default=1.0, ge=0.0, le=1.0)
     num_inference_steps: int = 30
     cfg_guidance_scale: float = 1.0
     negative_prompt: str = ""

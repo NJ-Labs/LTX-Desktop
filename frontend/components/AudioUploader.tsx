@@ -2,24 +2,22 @@ import { useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Music, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { importMediaFile } from '@/lib/media-import'
 
 interface AudioUploaderProps {
   onAudioSelect: (path: string | null) => void
   selectedAudio: string | null
+  destinationFolder: string
 }
 
-export function AudioUploader({ onAudioSelect, selectedAudio }: AudioUploaderProps) {
-  const onDrop = useCallback((acceptedFiles: File[]) => {
+export function AudioUploader({ onAudioSelect, selectedAudio, destinationFolder }: AudioUploaderProps) {
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0]
     if (file) {
-      const filePath = (file as any).path as string | undefined
-      if (filePath) {
-        const normalized = filePath.replace(/\\/g, '/')
-        const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
-        onAudioSelect(fileUrl)
-      }
+      const imported = await importMediaFile(file, destinationFolder)
+      if (imported) onAudioSelect(imported.url)
     }
-  }, [onAudioSelect])
+  }, [destinationFolder, onAudioSelect])
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,

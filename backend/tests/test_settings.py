@@ -21,8 +21,10 @@ class TestGetSettings:
         assert data["useTorchCompile"] is False
         assert data["loadOnStartup"] is False
         assert data["hasLtxApiKey"] is False
+        assert data["ltxApiBaseUrl"] == "https://api.ltx.video"
         assert data["userPrefersLtxApiVideoGenerations"] is False
         assert data["hasFalApiKey"] is False
+        assert data["falApiBaseUrl"] == "https://fal.run"
         assert data["useLocalTextEncoder"] is False
         assert data["fastModel"] == {"useUpscaler": True}
         assert data["proModel"] == {"steps": 20, "useUpscaler": True}
@@ -110,14 +112,30 @@ class TestPostSettings:
             "/api/settings",
             json={
                 "ltxApiKey": "ltx-key-abc",
+                "ltxApiBaseUrl": "https://openai.example/v1",
                 "geminiApiKey": "gemini-key-xyz",
                 "falApiKey": "fal-key-123",
+                "falApiBaseUrl": "https://fal-proxy.example",
             },
         )
         assert r.status_code == 200
         assert test_state.state.app_settings.ltx_api_key == "ltx-key-abc"
+        assert test_state.state.app_settings.ltx_api_base_url == "https://openai.example/v1"
         assert test_state.state.app_settings.gemini_api_key == "gemini-key-xyz"
         assert test_state.state.app_settings.fal_api_key == "fal-key-123"
+        assert test_state.state.app_settings.fal_api_base_url == "https://fal-proxy.example"
+
+    def test_blank_base_urls_reset_to_defaults(self, client, test_state):
+        r = client.post(
+            "/api/settings",
+            json={
+                "ltxApiBaseUrl": "  ",
+                "falApiBaseUrl": "",
+            },
+        )
+        assert r.status_code == 200
+        assert test_state.state.app_settings.ltx_api_base_url == "https://api.ltx.video"
+        assert test_state.state.app_settings.fal_api_base_url == "https://fal.run"
 
     def test_update_user_prefers_api_video_generations(self, client, test_state):
         r = client.post("/api/settings", json={"userPrefersLtxApiVideoGenerations": True})

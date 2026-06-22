@@ -2,28 +2,22 @@ import { useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Image as ImageIcon, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { importMediaFile } from '@/lib/media-import'
 
 interface ImageUploaderProps {
   onImageSelect: (path: string | null) => void
   selectedImage: string | null
+  destinationFolder: string
 }
 
-export function ImageUploader({ onImageSelect, selectedImage }: ImageUploaderProps) {
-  const onDrop = useCallback((acceptedFiles: File[]) => {
+export function ImageUploader({ onImageSelect, selectedImage, destinationFolder }: ImageUploaderProps) {
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0]
     if (file) {
-      // In Electron, File objects have a .path property with the full filesystem path
-      const filePath = (file as any).path as string | undefined
-      if (filePath) {
-        const normalized = filePath.replace(/\\/g, '/')
-        const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
-        onImageSelect(fileUrl)
-      } else {
-        const url = URL.createObjectURL(file)
-        onImageSelect(url)
-      }
+      const imported = await importMediaFile(file, destinationFolder)
+      if (imported) onImageSelect(imported.url)
     }
-  }, [onImageSelect])
+  }, [destinationFolder, onImageSelect])
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,

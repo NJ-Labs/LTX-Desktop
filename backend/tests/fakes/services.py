@@ -21,9 +21,16 @@ class FakeResponse:
     headers: dict[str, str] = field(default_factory=dict)
     content: bytes = b""
     json_payload: Any = field(default_factory=dict)
+    lines: list[bytes] = field(default_factory=list)
 
     def json(self) -> Any:
         return self.json_payload
+
+    def iter_lines(self):
+        return iter(self.lines)
+
+    def close(self) -> None:
+        pass
 
 
 @dataclass
@@ -41,6 +48,7 @@ class FakeHTTPClient:
         self.calls: list[HttpCall] = []
         self._queues: dict[str, list[FakeResponse | Exception]] = {
             "post": [],
+            "stream_post": [],
             "get": [],
             "put": [],
         }
@@ -67,6 +75,16 @@ class FakeHTTPClient:
     ) -> FakeResponse:
         self.calls.append(HttpCall("post", url, headers, json_payload, data, timeout))
         return self._dequeue("post")
+
+    def stream_post(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        json_payload: dict[str, Any] | None = None,
+        timeout: int = 30,
+    ) -> FakeResponse:
+        self.calls.append(HttpCall("stream_post", url, headers, json_payload, None, timeout))
+        return self._dequeue("stream_post")
 
     def get(
         self,
@@ -135,11 +153,13 @@ class FakeLTXAPIClient:
         *,
         api_key: str,
         file_path: str,
+        base_url: str | None = None,
     ) -> str:
         self.upload_file_calls.append(
             {
                 "api_key": api_key,
                 "file_path": file_path,
+                "base_url": base_url,
             }
         )
         if self.raise_on_upload_file is not None:
@@ -158,6 +178,7 @@ class FakeLTXAPIClient:
         fps: float,
         generate_audio: bool,
         camera_motion: VideoCameraMotion = "none",
+        base_url: str | None = None,
     ) -> bytes:
         self.text_to_video_calls.append(
             {
@@ -169,6 +190,7 @@ class FakeLTXAPIClient:
                 "fps": fps,
                 "generate_audio": generate_audio,
                 "camera_motion": camera_motion,
+                "base_url": base_url,
             }
         )
         if self.raise_on_text_to_video is not None:
@@ -187,6 +209,7 @@ class FakeLTXAPIClient:
         fps: float,
         generate_audio: bool,
         camera_motion: VideoCameraMotion = "none",
+        base_url: str | None = None,
     ) -> bytes:
         self.image_to_video_calls.append(
             {
@@ -199,6 +222,7 @@ class FakeLTXAPIClient:
                 "fps": fps,
                 "generate_audio": generate_audio,
                 "camera_motion": camera_motion,
+                "base_url": base_url,
             }
         )
         if self.raise_on_image_to_video is not None:
@@ -214,6 +238,7 @@ class FakeLTXAPIClient:
         image_uri: str | None,
         model: str,
         resolution: str,
+        base_url: str | None = None,
     ) -> bytes:
         self.audio_to_video_calls.append(
             {
@@ -223,6 +248,7 @@ class FakeLTXAPIClient:
                 "image_uri": image_uri,
                 "model": model,
                 "resolution": resolution,
+                "base_url": base_url,
             }
         )
         if self.raise_on_audio_to_video is not None:
@@ -238,6 +264,7 @@ class FakeLTXAPIClient:
         duration: float,
         prompt: str,
         mode: str,
+        base_url: str | None = None,
     ) -> LTXRetakeResult:
         self.retake_calls.append(
             {
@@ -247,6 +274,7 @@ class FakeLTXAPIClient:
                 "duration": duration,
                 "prompt": prompt,
                 "mode": mode,
+                "base_url": base_url,
             }
         )
         if self.raise_on_retake is not None:
@@ -273,6 +301,7 @@ class FakeZitAPIClient:
         height: int,
         seed: int,
         num_inference_steps: int,
+        base_url: str | None = None,
     ) -> bytes:
         self.text_to_image_calls.append(
             {
@@ -282,6 +311,7 @@ class FakeZitAPIClient:
                 "height": height,
                 "seed": seed,
                 "num_inference_steps": num_inference_steps,
+                "base_url": base_url,
             }
         )
         if self.raise_on_text_to_image is not None:
@@ -401,6 +431,7 @@ class FakeVideoProcessor:
         self.videos: dict[str, FakeCapture] = {}
         self.writers: list[FakeWriter] = []
         self.open_video_calls: list[str] = []
+        self.create_static_video_calls: list[dict[str, Any]] = []
 
     def register_video(self, path: str, capture: FakeCapture) -> None:
         self.videos[path] = capture
@@ -443,6 +474,29 @@ class FakeVideoProcessor:
         self.writers.append(writer)
         return writer
 
+    def create_static_video(
+        self,
+        image_path: str,
+        output_path: str,
+        *,
+        width: int,
+        height: int,
+        frame_count: int,
+        fps: float,
+    ) -> None:
+        self.create_static_video_calls.append(
+            {
+                "image_path": image_path,
+                "output_path": output_path,
+                "width": width,
+                "height": height,
+                "frame_count": frame_count,
+                "fps": fps,
+            }
+        )
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"fake-static-video")
+
     def release(self, cap_or_writer: FakeCapture | FakeWriter) -> None:
         cap_or_writer.release()
 
@@ -478,7 +532,13 @@ class _FakeVideoPipelineBase:
 
 class FakeFastVideoPipeline(_FakeVideoPipelineBase):
     pipeline_kind = "fast"
+    use_upscaler = True
+    create_calls: list[bool]
     _singleton: ClassVar["FakeFastVideoPipeline | None"] = None
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.create_calls = []
 
     @classmethod
     def bind_singleton(cls, pipeline: "FakeFastVideoPipeline") -> None:
@@ -489,12 +549,15 @@ class FakeFastVideoPipeline(_FakeVideoPipelineBase):
         checkpoint_path: str,
         gemma_root: str | None,
         upsampler_path: str,
+        use_upscaler: bool,
         device: str | object,
     ) -> "FakeFastVideoPipeline":
         del checkpoint_path, gemma_root, upsampler_path, device
         pipeline = FakeFastVideoPipeline._singleton
         if pipeline is None:
             raise RuntimeError("FakeFastVideoPipeline singleton is not bound")
+        pipeline.use_upscaler = use_upscaler
+        pipeline.create_calls.append(use_upscaler)
         return pipeline
 
     def generate(
@@ -637,15 +700,18 @@ class FakeIcLoraPipeline:
         gemma_root: str | None,
         upsampler_path: str,
         lora_path: str,
+        lora_strength: float,
         device: str | object,
     ) -> "FakeIcLoraPipeline":
         del checkpoint_path, gemma_root, upsampler_path, lora_path, device
         pipeline = FakeIcLoraPipeline._singleton
         if pipeline is None:
             raise RuntimeError("FakeIcLoraPipeline singleton is not bound")
+        pipeline.create_calls.append({"lora_strength": lora_strength})
         return pipeline
 
     def __init__(self) -> None:
+        self.create_calls: list[dict[str, Any]] = []
         self.generate_calls: list[dict[str, Any]] = []
         self.raise_on_generate: Exception | None = None
 

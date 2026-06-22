@@ -85,6 +85,7 @@ class RetakeHandler(StateHandlerBase):
         mode: str,
     ) -> RetakeResponse:
         api_key = self.state.app_settings.ltx_api_key
+        ltx_api_base_url = self.state.app_settings.ltx_api_base_url
         if not api_key:
             raise HTTPError(400, "LTX API key not configured. Set it in Settings.")
 
@@ -96,6 +97,7 @@ class RetakeHandler(StateHandlerBase):
                 duration=duration,
                 prompt=prompt,
                 mode=mode,
+                base_url=ltx_api_base_url,
             )
         except LTXAPIClientError as exc:
             raise HTTPError(exc.status_code, exc.detail) from exc

@@ -7,8 +7,9 @@ import hmac
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -47,6 +48,7 @@ def create_app(
     admin_token: str = "",
     static_dir: Path | None = None,
     media_roots: list[Path] | None = None,
+    media_upload_root: Path | None = None,
 ) -> FastAPI:
     """Create a configured FastAPI app bound to the provided handler."""
     init_state_service(handler)
@@ -132,6 +134,42 @@ def create_app(
     app.include_router(library_router)
 
     allowed_media_roots = [root.resolve() for root in (media_roots or [])]
+
+    if media_upload_root is not None:
+        upload_root = media_upload_root.resolve()
+        upload_root.mkdir(parents=True, exist_ok=True)
+
+        @app.post("/api/media/upload", response_model=None)
+        async def _upload_media_file(  # pyright: ignore[reportUnusedFunction]
+            file: UploadFile = File(...),
+            folder: str = Form(...),
+        ) -> dict[str, str]:
+            import re
+            import uuid
+
+            if not re.fullmatch(r"[A-Za-z0-9._-]+", folder) or folder in {".", ".."}:
+                raise HTTPError(400, "Invalid media folder")
+            if not file.content_type or file.content_type.split("/", 1)[0] not in {"image", "video", "audio"}:
+                raise HTTPError(415, "Only image, video, and audio uploads are supported")
+
+            original_name = Path(file.filename or "media").name
+            suffix = Path(original_name).suffix
+            stem = Path(original_name).stem or "media"
+            destination_dir = upload_root / folder
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            destination = destination_dir / original_name
+            if destination.exists():
+                destination = destination_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
+
+            try:
+                with destination.open("wb") as output:
+                    while chunk := await file.read(1024 * 1024):
+                        output.write(chunk)
+            finally:
+                await file.close()
+
+            resolved = destination.resolve()
+            return {"path": str(resolved), "url": f"/media?path={quote(str(resolved), safe='')}"}
 
     def _is_within_root(candidate: Path, root: Path) -> bool:
         try:

@@ -4,12 +4,15 @@ import { isGatewayTimeoutStatus, waitForGenerationTerminal } from '../lib/genera
 import { logger } from '../lib/logger'
 import { pathToBrowserUrl } from '../lib/web-mode'
 
-export type IcLoraConditioningType = 'canny' | 'depth' | 'pose'
+export type IcLoraAdapterType = 'union' | 'ingredients'
+export type IcLoraConditioningType = 'canny' | 'depth' | 'pose' | 'reference_sheet'
 
 export interface IcLoraSubmitParams {
   videoPath: string
+  adapterType: IcLoraAdapterType
   conditioningType: IcLoraConditioningType
   conditioningStrength: number
+  anchorImagePath?: string | null
   prompt: string
 }
 
@@ -88,8 +91,13 @@ export function useIcLora() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             video_path: params.videoPath,
+            adapter_type: params.adapterType,
             conditioning_type: params.conditioningType,
             conditioning_strength: params.conditioningStrength,
+            attention_strength: 1.0,
+            images: params.anchorImagePath
+              ? [{ path: params.anchorImagePath, frame: 0, strength: 1.0 }]
+              : [],
             prompt: params.prompt,
           }),
         })

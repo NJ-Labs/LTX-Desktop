@@ -17,6 +17,7 @@ class IcLoraPipeline(Protocol):
         gemma_root: str | None,
         upsampler_path: str,
         lora_path: str,
+        lora_strength: float,
         device: torch.device,
     ) -> "IcLoraPipeline":
         ...
@@ -31,6 +32,7 @@ class IcLoraPipeline(Protocol):
         frame_rate: float,
         images: list[ImageConditioningInput],
         video_conditioning: list[tuple[str, float]],
+        conditioning_attention_strength: float,
         output_path: str,
     ) -> None:
         ...

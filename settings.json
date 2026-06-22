@@ -3,7 +3,9 @@
   "use_torch_compile": false,
   "load_on_startup": false,
   "ltx_api_key": "",
+  "ltx_api_base_url": "https://api.ltx.video",
   "fal_api_key": "",
+  "fal_api_base_url": "https://fal.run",
   "fast_model": {
     "steps": 8,
     "use_upscaler": true

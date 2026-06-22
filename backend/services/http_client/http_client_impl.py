@@ -16,6 +16,18 @@ logger = logging.getLogger(__name__)
 class HTTPClientImpl:
     """Wraps requests.* for external API calls."""
 
+    def stream_post(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        json_payload: Mapping[str, JSONValue] | None = None,
+        timeout: int = 30,
+    ) -> requests.Response:
+        try:
+            return requests.post(url, headers=headers, json=json_payload, timeout=timeout, stream=True)
+        except requests.Timeout as exc:
+            raise HttpTimeoutError(str(exc)) from exc
+
     def post(
         self,
         url: str,

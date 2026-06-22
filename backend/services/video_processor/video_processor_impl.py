@@ -85,6 +85,41 @@ class VideoProcessorImpl:
         code = cv2.VideoWriter.fourcc(*fourcc)
         return cast(VideoWriterLike, cv2.VideoWriter(path, code, fps, size))
 
+    def create_static_video(
+        self,
+        image_path: str,
+        output_path: str,
+        *,
+        width: int,
+        height: int,
+        frame_count: int,
+        fps: float,
+    ) -> None:
+        import cv2
+        import numpy as np
+
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Could not read reference image: {image_path}")
+
+        source_height, source_width = image.shape[:2]
+        scale = min(width / source_width, height / source_height)
+        resized_width = max(1, round(source_width * scale))
+        resized_height = max(1, round(source_height * scale))
+        resized = cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)
+        x = (width - resized_width) // 2
+        y = (height - resized_height) // 2
+        canvas[y : y + resized_height, x : x + resized_width] = resized
+
+        writer = self.create_writer(output_path, fourcc="mp4v", fps=fps, size=(width, height))
+        try:
+            for _ in range(frame_count):
+                writer.write(canvas)
+        finally:
+            self.release(writer)
+
     def release(self, cap_or_writer: VideoCaptureLike | VideoWriterLike) -> None:
         try:
             cap_or_writer.release()

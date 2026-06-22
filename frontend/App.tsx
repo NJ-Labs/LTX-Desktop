@@ -26,7 +26,7 @@ function AppContent() {
   const webMode = isWebMode()
   const { currentView } = useProjects()
   const { status, processStatus, isLoading: backendLoading, error: backendError } = useBackend()
-  const { settings, saveLtxApiKey, saveFalApiKey, forceApiGenerations, isLoaded, runtimePolicyLoaded, offlineMode } = useAppSettings()
+  const { settings, saveLtxApiConfig, saveFalApiConfig, forceApiGenerations, isLoaded, runtimePolicyLoaded, offlineMode } = useAppSettings()
 
   const [pythonReady, setPythonReady] = useState<boolean | null>(null)
   const [backendStarted, setBackendStarted] = useState(false)
@@ -172,19 +172,6 @@ function AppContent() {
     })
   }, [])
 
-  const saveApiKeyForFirstRun = useCallback(
-    async (apiKey: string) => {
-      const trimmed = apiKey.trim()
-      if (!trimmed) {
-        throw new Error('Please enter a valid LTX API key.')
-      }
-
-      await saveLtxApiKey(trimmed)
-      setFirstRunFinalizeError(null)
-    },
-    [saveLtxApiKey],
-  )
-
   const isForcedFirstRun =
     setupState !== 'loading' && setupState.needsSetup && !setupState.needsLicense && forceApiGenerations
 
@@ -247,12 +234,17 @@ function AppContent() {
   const gatewaySections: ApiGatewaySection[] = useMemo(() => {
     if (!apiGatewayRequest) return []
 
-    const handleSaveLtxKey = async (apiKey: string) => {
+    const handleSaveLtxKey = async (apiKey: string, baseUrl: string) => {
       if (isForcedFirstRun) {
-        await saveApiKeyForFirstRun(apiKey)
+        const trimmed = apiKey.trim()
+        if (!trimmed) {
+          throw new Error('Please enter a valid LTX API key.')
+        }
+        await saveLtxApiConfig(trimmed, baseUrl)
+        setFirstRunFinalizeError(null)
         return
       }
-      await saveLtxApiKey(apiKey)
+      await saveLtxApiConfig(apiKey, baseUrl)
     }
 
     const sections: ApiGatewaySection[] = [
@@ -263,6 +255,9 @@ function AppContent() {
         required: apiGatewayRequest.requiredKeys.includes('ltx'),
         isConfigured: settings.hasLtxApiKey,
         inputLabel: 'LTX API key',
+        baseUrlLabel: 'LTX API base URL',
+        baseUrlPlaceholder: 'https://api.ltx.video',
+        baseUrlValue: settings.ltxApiBaseUrl,
         placeholder: 'Enter your LTX API key...',
         onSave: handleSaveLtxKey,
         onGetKey: () => window.electronAPI.openLtxApiKeyPage(),
@@ -275,8 +270,11 @@ function AppContent() {
         required: apiGatewayRequest.requiredKeys.includes('fal'),
         isConfigured: settings.hasFalApiKey,
         inputLabel: 'FAL AI API key',
+        baseUrlLabel: 'FAL API base URL',
+        baseUrlPlaceholder: 'https://fal.run',
+        baseUrlValue: settings.falApiBaseUrl,
         placeholder: 'Enter your FAL AI API key...',
-        onSave: saveFalApiKey,
+        onSave: saveFalApiConfig,
         onGetKey: () => window.electronAPI.openFalApiKeyPage(),
         getKeyLabel: 'Get FAL API key',
       },
@@ -290,11 +288,12 @@ function AppContent() {
   }, [
     apiGatewayRequest,
     isForcedFirstRun,
-    saveApiKeyForFirstRun,
-    saveFalApiKey,
-    saveLtxApiKey,
+    saveLtxApiConfig,
+    saveFalApiConfig,
     settings.hasFalApiKey,
+    settings.falApiBaseUrl,
     settings.hasLtxApiKey,
+    settings.ltxApiBaseUrl,
   ])
 
   if (pythonReady === null) {

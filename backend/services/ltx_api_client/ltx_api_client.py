@@ -28,6 +28,7 @@ class LTXAPIClient(Protocol):
         *,
         api_key: str,
         file_path: str,
+        base_url: str | None = None,
     ) -> str:
         ...
 
@@ -42,6 +43,7 @@ class LTXAPIClient(Protocol):
         fps: float,
         generate_audio: bool,
         camera_motion: VideoCameraMotion = "none",
+        base_url: str | None = None,
     ) -> bytes:
         ...
 
@@ -57,6 +59,7 @@ class LTXAPIClient(Protocol):
         fps: float,
         generate_audio: bool,
         camera_motion: VideoCameraMotion = "none",
+        base_url: str | None = None,
     ) -> bytes:
         ...
 
@@ -69,6 +72,7 @@ class LTXAPIClient(Protocol):
         image_uri: str | None,
         model: str,
         resolution: str,
+        base_url: str | None = None,
     ) -> bytes:
         ...
 
@@ -81,5 +85,6 @@ class LTXAPIClient(Protocol):
         duration: float,
         prompt: str,
         mode: str,
+        base_url: str | None = None,
     ) -> LTXRetakeResult:
         ...

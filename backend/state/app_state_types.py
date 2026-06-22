@@ -106,8 +106,9 @@ class VideoPipelineState:
 class ICLoraState:
     pipeline: IcLoraPipeline
     lora_path: str
-    depth_pipeline: DepthProcessorPipeline
-    depth_model_path: str
+    lora_strength: float
+    depth_pipeline: DepthProcessorPipeline | None = None
+    depth_model_path: str | None = None
     pose_pipeline: PoseProcessorPipeline | None = None
     person_detector_model_path: str | None = None
     pose_model_path: str | None = None

@@ -168,6 +168,8 @@ PROJECT_ROOT = Path(__file__).parent.parent
 FRONTEND_DIST_DIR = Path(os.environ.get("LTX_FRONTEND_DIST", str(PROJECT_ROOT / "dist")))
 OUTPUTS_DIR = APP_DATA_DIR / "outputs"
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+MEDIA_UPLOAD_ROOT = Path(os.environ.get("LTX_MEDIA_ROOT", str(APP_DATA_DIR / "ltx-data")))
+MEDIA_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
 logger.info(f"Models directory: {DEFAULT_MODELS_DIR}")
 if FORCED_MODELS_DIR is not None:
@@ -283,7 +285,8 @@ app = create_app(
     auth_token=auth_token,
     admin_token=admin_token,
     static_dir=FRONTEND_DIST_DIR if FRONTEND_DIST_DIR.exists() else None,
-    media_roots=[OUTPUTS_DIR],
+    media_roots=[OUTPUTS_DIR, MEDIA_UPLOAD_ROOT],
+    media_upload_root=MEDIA_UPLOAD_ROOT,
 )
 
 

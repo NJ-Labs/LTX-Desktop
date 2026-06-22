@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from api_types import (
     EnhancePromptRequest,
@@ -22,6 +23,15 @@ def route_enhance_prompt(
     handler: AppHandler = Depends(get_state_service),
 ) -> EnhancePromptResponse:
     return handler.prompt_enhancer.enhance(req)
+
+
+@router.post("/enhance/stream")
+def route_enhance_prompt_stream(
+    req: EnhancePromptRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> StreamingResponse:
+    chunks = handler.prompt_enhancer.enhance_stream(req)
+    return StreamingResponse(chunks, media_type="application/x-ndjson")
 
 
 @router.post("/test", response_model=TestPromptEnhancerResponse)

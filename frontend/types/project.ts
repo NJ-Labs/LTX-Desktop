@@ -19,8 +19,10 @@ export interface GenerationParams {
   retakeDuration?: number
   retakeMode?: string
   icLoraVideoPath?: string
+  icLoraAdapterType?: 'union' | 'ingredients'
   icLoraConditioningType?: string
   icLoraConditioningStrength?: number
+  icLoraAnchorImagePath?: string
 }
 
 // A single "take" (version) of a generated asset

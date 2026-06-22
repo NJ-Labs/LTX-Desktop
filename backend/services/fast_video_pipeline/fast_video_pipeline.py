@@ -13,12 +13,14 @@ if TYPE_CHECKING:
 
 class FastVideoPipeline(Protocol):
     pipeline_kind: ClassVar[Literal["fast"]]
+    use_upscaler: bool
 
     @staticmethod
     def create(
         checkpoint_path: str,
         gemma_root: str | None,
         upsampler_path: str,
+        use_upscaler: bool,
         device: torch.device,
     ) -> "FastVideoPipeline":
         ...

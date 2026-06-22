@@ -25,6 +25,17 @@ const MIME_TYPES: Record<string, string> = {
   '.mov': 'video/quicktime',
 }
 
+function uniqueDestination(dir: string, fileName: string): string {
+  const parsed = path.parse(fileName)
+  let candidate = path.join(dir, fileName)
+  let suffix = 1
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(dir, `${parsed.name}-${suffix}${parsed.ext}`)
+    suffix += 1
+  }
+  return candidate
+}
+
 function readLocalFileAsBase64(filePath: string): { data: string; mimeType: string } {
   const data = fs.readFileSync(filePath)
   const base64 = data.toString('base64')
@@ -173,13 +184,55 @@ export function registerFileHandlers(): void {
       const destDir = path.join(assetsRoot, projectId)
       fs.mkdirSync(destDir, { recursive: true })
       const fileName = path.basename(resolvedSrc)
-      const destPath = path.join(destDir, fileName)
+      const destPath = uniqueDestination(destDir, fileName)
       fs.copyFileSync(resolvedSrc, destPath)
       const normalized = destPath.replace(/\\/g, '/')
       const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
       return { success: true, path: destPath, url: fileUrl }
     } catch (error) {
       logger.error(`Error copying to project assets: ${error}`)
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('import-media-asset', async (_event, srcPath: string, folder: string) => {
+    try {
+      const resolvedSrc = validatePath(srcPath, getAllowedRoots())
+      if (!fs.statSync(resolvedSrc).isFile()) throw new Error('Media source is not a file')
+      if (!/^[a-zA-Z0-9._-]+$/.test(folder) || folder === '.' || folder === '..') {
+        throw new Error('Invalid media folder')
+      }
+      const destDir = path.join(getProjectAssetsPath(), folder)
+      fs.mkdirSync(destDir, { recursive: true })
+      const destPath = uniqueDestination(destDir, path.basename(resolvedSrc))
+      fs.copyFileSync(resolvedSrc, destPath)
+      approvePath(destPath)
+      const normalized = destPath.replace(/\\/g, '/')
+      const url = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
+      return { success: true, path: destPath, url }
+    } catch (error) {
+      logger.error(`Error importing media asset: ${error}`)
+      return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('import-media-data', async (_event, fileName: string, data: ArrayBuffer, folder: string) => {
+    try {
+      if (!/^[a-zA-Z0-9._-]+$/.test(folder) || folder === '.' || folder === '..') {
+        throw new Error('Invalid media folder')
+      }
+      const safeName = path.basename(fileName)
+      if (!safeName || safeName === '.' || safeName === '..') throw new Error('Invalid media filename')
+      const destDir = path.join(getProjectAssetsPath(), folder)
+      fs.mkdirSync(destDir, { recursive: true })
+      const destPath = uniqueDestination(destDir, safeName)
+      fs.writeFileSync(destPath, Buffer.from(data))
+      approvePath(destPath)
+      const normalized = destPath.replace(/\\/g, '/')
+      const url = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
+      return { success: true, path: destPath, url }
+    } catch (error) {
+      logger.error(`Error importing media data: ${error}`)
       return { success: false, error: String(error) }
     }
   })

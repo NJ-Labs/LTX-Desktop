@@ -1,13 +1,15 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Upload, Loader2, Film, Sparkles,
-  RefreshCw, Download, AlertCircle, Trash2,
+  RefreshCw, Download, AlertCircle, Trash2, Image as ImageIcon, UserRound, X,
 } from 'lucide-react'
 import { backendFetch } from '../lib/backend'
 import { logger } from '../lib/logger'
 import { fileUrlToPath } from '../lib/url-to-path'
+import { importMediaFile, importMediaPath } from '../lib/media-import'
 
-export type ICLoraConditioningType = 'canny' | 'depth'
+export type ICLoraAdapterType = 'union' | 'ingredients'
+export type ICLoraConditioningType = 'canny' | 'depth' | 'pose' | 'reference_sheet'
 
 type DownloadStatus = 'idle' | 'downloading' | 'complete' | 'error'
 
@@ -38,6 +40,7 @@ interface ModelsStatusResponse {
 }
 
 interface ICLoraPanelProps {
+  destinationFolder: string
   initialVideoUrl?: string | null
   initialVideoPath?: string | null
   resetKey?: number
@@ -48,13 +51,17 @@ interface ICLoraPanelProps {
   onConditioningTypeChange?: (type: ICLoraConditioningType) => void
   conditioningStrength?: number
   onConditioningStrengthChange?: (strength: number) => void
+  adapterType?: ICLoraAdapterType
+  onAdapterTypeChange?: (type: ICLoraAdapterType) => void
   outputVideoUrl?: string | null
   outputVideoPath?: string | null
   onChange?: (data: {
     videoUrl: string | null
     videoPath: string | null
+    adapterType: ICLoraAdapterType
     conditioningType: ICLoraConditioningType
     conditioningStrength: number
+    anchorImagePath: string | null
     ready: boolean
   }) => void
 }
@@ -62,27 +69,41 @@ interface ICLoraPanelProps {
 export const CONDITIONING_TYPES: { value: ICLoraConditioningType; label: string; desc: string }[] = [
   { value: 'canny', label: 'Canny Edges', desc: 'Edge detection' },
   { value: 'depth', label: 'Depth Map', desc: 'Estimated depth' },
+  { value: 'pose', label: 'Body Pose', desc: 'DWPose skeleton' },
 ]
 
-const IC_LORA_MODEL_IDS = ['ic_lora', 'depth_processor'] as const
+export const IC_LORA_ADAPTERS: { value: ICLoraAdapterType; label: string; desc: string }[] = [
+  { value: 'union', label: 'Motion Control', desc: 'Video structure with optional identity anchor' },
+  { value: 'ingredients', label: 'Character Sheet', desc: 'Preserve identity, clothing, and proportions' },
+]
+
+const IC_LORA_MODEL_IDS = [
+  'ic_lora',
+  'ic_lora_ingredients',
+  'depth_processor',
+  'person_detector',
+  'pose_processor',
+] as const
 type IcLoraModelId = typeof IC_LORA_MODEL_IDS[number]
 
 const IC_LORA_MODEL_LABELS: Record<IcLoraModelId, string> = {
   ic_lora: 'IC-LoRA Union',
+  ic_lora_ingredients: 'IC-LoRA Ingredients',
   depth_processor: 'Depth Processor',
+  person_detector: 'Person Detector',
+  pose_processor: 'DWPose Processor',
 }
 
 const EMPTY_IC_MODEL_STATUS: Record<IcLoraModelId, boolean> = {
   ic_lora: false,
+  ic_lora_ingredients: false,
   depth_processor: false,
-}
-
-function pathToFileUrl(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/')
-  return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
+  person_detector: false,
+  pose_processor: false,
 }
 
 export function ICLoraPanel({
+  destinationFolder,
   initialVideoUrl,
   initialVideoPath,
   resetKey,
@@ -93,6 +114,8 @@ export function ICLoraPanel({
   onConditioningTypeChange,
   conditioningStrength: conditioningStrengthProp,
   onConditioningStrengthChange,
+  adapterType: adapterTypeProp,
+  onAdapterTypeChange,
   outputVideoUrl,
   outputVideoPath: _outputVideoPath,
   onChange,
@@ -101,10 +124,14 @@ export function ICLoraPanel({
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(initialVideoUrl || null)
   const [inputVideoPath, setInputVideoPath] = useState<string | null>(initialVideoPath || null)
   const [inputTime, setInputTime] = useState(0)
+  const [anchorImageUrl, setAnchorImageUrl] = useState<string | null>(null)
+  const [anchorImagePath, setAnchorImagePath] = useState<string | null>(null)
 
+  const [internalAdapterType, setInternalAdapterType] = useState<ICLoraAdapterType>('union')
   const [internalCondType, setInternalCondType] = useState<ICLoraConditioningType>('canny')
   const [internalCondStrength, setInternalCondStrength] = useState(1.0)
   const conditioningType = conditioningTypeProp ?? internalCondType
+  const adapterType = adapterTypeProp ?? internalAdapterType
   const conditioningStrength = conditioningStrengthProp ?? internalCondStrength
   const [conditioningPreview, setConditioningPreview] = useState<string | null>(null)
   const [isExtracting, setIsExtracting] = useState(false)
@@ -117,16 +144,26 @@ export function ICLoraPanel({
   const [downloadSessionId, setDownloadSessionId] = useState<string | null>(null)
   const [extractError, setExtractError] = useState<string | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
-  const icLoraReady = IC_LORA_MODEL_IDS.every(id => icModelDownloaded[id])
+  const requiredModelIds = useMemo<IcLoraModelId[]>(() => {
+    if (adapterType === 'ingredients') return ['ic_lora_ingredients']
+    if (conditioningType === 'depth') return ['ic_lora', 'depth_processor']
+    if (conditioningType === 'pose') return ['ic_lora', 'person_detector', 'pose_processor']
+    return ['ic_lora']
+  }, [adapterType, conditioningType])
+  const icLoraReady = requiredModelIds.every(id => icModelDownloaded[id])
 
   useEffect(() => {
     if (resetKey === undefined) return
     setInputVideoUrl(initialVideoUrl || null)
     setInputVideoPath(initialVideoPath || null)
     setInputTime(0)
+    setAnchorImageUrl(null)
+    setAnchorImagePath(null)
+    setInternalAdapterType('union')
     setInternalCondType('canny')
     setInternalCondStrength(1.0)
     onConditioningTypeChange?.('canny')
+    onAdapterTypeChange?.('union')
     onConditioningStrengthChange?.(1.0)
     setConditioningPreview(null)
     setExtractError(null)
@@ -137,11 +174,24 @@ export function ICLoraPanel({
     onChange?.({
       videoUrl: inputVideoUrl,
       videoPath: inputVideoPath,
+      adapterType,
       conditioningType,
       conditioningStrength,
+      anchorImagePath,
       ready,
     })
-  }, [inputVideoUrl, inputVideoPath, conditioningType, conditioningStrength, icLoraReady, onChange])
+  }, [inputVideoUrl, inputVideoPath, adapterType, conditioningType, conditioningStrength, anchorImagePath, icLoraReady, onChange])
+
+  const previousAdapterRef = useRef(adapterType)
+  useEffect(() => {
+    if (previousAdapterRef.current === adapterType) return
+    previousAdapterRef.current = adapterType
+    setInputVideoUrl(null)
+    setInputVideoPath(null)
+    setInputTime(0)
+    setConditioningPreview(null)
+    setExtractError(null)
+  }, [adapterType])
 
   const checkIcLoraAvailability = useCallback(async () => {
     setIsCheckingIcLora(true)
@@ -158,7 +208,7 @@ export function ICLoraPanel({
         nextStatus[modelId] = statusPayload.models.some(model => model.id === modelId && model.downloaded)
       })
       setIcModelDownloaded(nextStatus)
-      const isReady = IC_LORA_MODEL_IDS.every(modelId => nextStatus[modelId])
+      const isReady = requiredModelIds.every(modelId => nextStatus[modelId])
 
       if (isReady) {
         setIsDownloadingIcLora(false)
@@ -172,7 +222,7 @@ export function ICLoraPanel({
     } finally {
       setIsCheckingIcLora(false)
     }
-  }, [])
+  }, [requiredModelIds])
 
   useEffect(() => {
     void checkIcLoraAvailability()
@@ -219,7 +269,7 @@ export function ICLoraPanel({
       const response = await backendFetch('/api/models/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ modelTypes: [...IC_LORA_MODEL_IDS] }),
+        body: JSON.stringify({ modelTypes: requiredModelIds }),
       })
 
       const payload = await response.json().catch(() => ({})) as ModelDownloadStartResponse
@@ -242,11 +292,11 @@ export function ICLoraPanel({
       logger.warn(`Failed to start IC-LoRA download: ${e}`)
       setDownloadError((e as Error).message)
     }
-  }, [isDownloadingIcLora])
+  }, [isDownloadingIcLora, requiredModelIds])
 
   const isExtractingRef = useRef(false)
   const extractConditioning = useCallback(async () => {
-    if (!inputVideoPath || isExtractingRef.current || !icLoraReady) return
+    if (adapterType === 'ingredients' || !inputVideoPath || isExtractingRef.current || !icLoraReady) return
     isExtractingRef.current = true
     setIsExtracting(true)
     setExtractError(null)
@@ -274,11 +324,11 @@ export function ICLoraPanel({
       isExtractingRef.current = false
       setIsExtracting(false)
     }
-  }, [inputVideoPath, conditioningType, inputTime, icLoraReady])
+  }, [adapterType, inputVideoPath, conditioningType, inputTime, icLoraReady])
 
   const extractTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (!inputVideoPath || !icLoraReady) return
+    if (adapterType === 'ingredients' || !inputVideoPath || !icLoraReady) return
     if (extractTimerRef.current) clearTimeout(extractTimerRef.current)
     extractTimerRef.current = setTimeout(() => {
       void extractConditioning()
@@ -286,7 +336,7 @@ export function ICLoraPanel({
     return () => {
       if (extractTimerRef.current) clearTimeout(extractTimerRef.current)
     }
-  }, [inputTime, conditioningType, inputVideoPath, icLoraReady, extractConditioning])
+  }, [adapterType, inputTime, conditioningType, inputVideoPath, icLoraReady, extractConditioning])
 
   useEffect(() => {
     const video = inputVideoRef.current
@@ -303,17 +353,32 @@ export function ICLoraPanel({
 
   const handleBrowse = useCallback(async () => {
     const paths = await window.electronAPI.showOpenFileDialog({
-      title: 'Select Driving Video',
-      filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'avi', 'webm', 'mkv'] }],
+      title: adapterType === 'ingredients' ? 'Select Character Reference Sheet' : 'Select Driving Video',
+      filters: adapterType === 'ingredients'
+        ? [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+        : [{ name: 'Video', extensions: ['mp4', 'mov', 'avi', 'webm', 'mkv'] }],
     })
     if (paths && paths.length > 0) {
-      const filePath = paths[0]
-      setInputVideoPath(filePath)
-      setInputVideoUrl(pathToFileUrl(filePath))
+      const imported = await importMediaPath(paths[0], destinationFolder)
+      if (!imported) return
+      setInputVideoPath(imported.path)
+      setInputVideoUrl(imported.url)
       setConditioningPreview(null)
       setExtractError(null)
     }
-  }, [])
+  }, [adapterType, destinationFolder])
+
+  const handleBrowseAnchor = useCallback(async () => {
+    const paths = await window.electronAPI.showOpenFileDialog({
+      title: 'Select Character Identity Anchor',
+      filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    })
+    if (!paths || paths.length === 0) return
+    const imported = await importMediaPath(paths[0], destinationFolder)
+    if (!imported) return
+    setAnchorImagePath(imported.path)
+    setAnchorImageUrl(imported.url)
+  }, [destinationFolder])
 
   const handleClear = useCallback(() => {
     setInputVideoPath(null)
@@ -323,7 +388,7 @@ export function ICLoraPanel({
     setExtractError(null)
   }, [])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragOver(false)
 
@@ -331,7 +396,8 @@ export function ICLoraPanel({
     if (assetData) {
       try {
         const asset = JSON.parse(assetData) as { type?: string; url?: string; path?: string }
-        if (asset.type === 'video' && asset.url) {
+        const expectedType = adapterType === 'ingredients' ? 'image' : 'video'
+        if (asset.type === expectedType && asset.url) {
           const path = asset.path || fileUrlToPath(asset.url) || null
           setInputVideoUrl(asset.url)
           setInputVideoPath(path)
@@ -346,18 +412,18 @@ export function ICLoraPanel({
 
     const file = e.dataTransfer.files?.[0]
     if (file) {
-      const filePath = (file as unknown as { path?: string }).path
-      if (filePath) {
-        setInputVideoPath(filePath)
-        setInputVideoUrl(pathToFileUrl(filePath))
+      const imported = await importMediaFile(file, destinationFolder)
+      if (imported) {
+        setInputVideoPath(imported.path)
+        setInputVideoUrl(imported.url)
         setConditioningPreview(null)
         setExtractError(null)
       }
     }
-  }, [])
+  }, [adapterType, destinationFolder])
 
   const showDownloadGate = isCheckingIcLora || !icLoraReady
-  const gateItems = IC_LORA_MODEL_IDS.map(modelId => {
+  const gateItems = requiredModelIds.map(modelId => {
     const downloaded = icModelDownloaded[modelId]
     const isCompleted = downloadProgress?.completed_files?.includes(modelId) ?? false
     const isCurrentDownload = isDownloadingIcLora && downloadProgress?.current_downloading_file === modelId
@@ -371,10 +437,35 @@ export function ICLoraPanel({
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 flex-shrink-0">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-amber-400" />
-          <span className="text-sm font-semibold text-white">IC-LoRA / Style Transfer</span>
+          <span className="text-sm font-semibold text-white">Character Consistency</span>
         </div>
-        {inputVideoUrl && (
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
+          {adapterType === 'union' && (
+            <div className="flex items-center gap-1.5">
+              {anchorImageUrl && (
+                <img src={anchorImageUrl} alt="Character identity anchor" className="h-7 w-7 rounded-md object-cover border border-zinc-700" />
+              )}
+              <button
+                onClick={handleBrowseAnchor}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-zinc-700 text-[10px] text-zinc-300 hover:text-white hover:border-zinc-600 transition-colors"
+                title="Add a clear face or full-body image at frame 0"
+              >
+                <UserRound className="h-3 w-3 text-amber-400" />
+                {anchorImagePath ? 'Replace anchor' : 'Add identity anchor'}
+              </button>
+              {anchorImagePath && (
+                <button
+                  onClick={() => { setAnchorImagePath(null); setAnchorImageUrl(null) }}
+                  className="p-1 rounded-md text-zinc-500 hover:text-white hover:bg-zinc-800"
+                  title="Remove identity anchor"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          )}
+          {inputVideoUrl && (
+            <div className="flex items-center gap-2">
             <button
               onClick={handleClear}
               className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
@@ -390,7 +481,8 @@ export function ICLoraPanel({
               <RefreshCw className="h-3.5 w-3.5" />
             </button>
           </div>
-        )}
+          )}
+        </div>
       </div>
 
       {showDownloadGate ? (
@@ -401,9 +493,9 @@ export function ICLoraPanel({
                 <Download className="h-4 w-4 text-blue-400" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-white">Download Required: IC-LoRA Resources</h3>
+                <h3 className="text-sm font-semibold text-white">Download Required: Character Models</h3>
                 <p className="text-xs text-zinc-400 mt-1">
-                  Editing is locked until all IC-LoRA preprocessing models are available locally.
+                  The selected adapter and its preprocessing models must be available locally.
                 </p>
               </div>
             </div>
@@ -495,23 +587,33 @@ export function ICLoraPanel({
               onDrop={handleDrop}
             >
               {inputVideoUrl ? (
-                <video
-                  ref={inputVideoRef}
-                  src={inputVideoUrl}
-                  className="w-full h-full object-contain"
-                  controls
-                />
+                adapterType === 'ingredients' ? (
+                  <img src={inputVideoUrl} alt="Character reference sheet" className="w-full h-full object-contain" />
+                ) : (
+                  <video
+                    ref={inputVideoRef}
+                    src={inputVideoUrl}
+                    className="w-full h-full object-contain"
+                    controls
+                  />
+                )
               ) : (
                 <div className="text-center p-4">
                   <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center mx-auto mb-2">
-                    <Film className="h-6 w-6 text-zinc-600" />
+                    {adapterType === 'ingredients'
+                      ? <ImageIcon className="h-6 w-6 text-zinc-600" />
+                      : <Film className="h-6 w-6 text-zinc-600" />}
                   </div>
-                  <p className="text-zinc-400 text-xs">Drop or import a driving video</p>
+                  <p className="text-zinc-400 text-xs">
+                    {adapterType === 'ingredients'
+                      ? 'Drop or import a multi-view character sheet'
+                      : 'Drop or import a driving video'}
+                  </p>
                   <button
                     onClick={handleBrowse}
                     className="mt-2 px-3 py-1.5 text-[10px] text-blue-400 border border-blue-500/30 rounded-lg hover:bg-blue-600/10 transition-colors"
                   >
-                    Import Video
+                    {adapterType === 'ingredients' ? 'Import Reference Sheet' : 'Import Video'}
                   </button>
                 </div>
               )}
@@ -521,13 +623,15 @@ export function ICLoraPanel({
           <div className="flex-1 flex flex-col min-w-0">
             <div className="px-3 py-2 border-b border-zinc-800 flex items-center justify-between gap-2">
               <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Conditioning</span>
-              <button
-                onClick={() => { void extractConditioning() }}
-                disabled={!inputVideoPath || isExtracting}
-                className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors disabled:opacity-50"
-              >
-                <RefreshCw className={`h-3 w-3 ${isExtracting ? 'animate-spin' : ''}`} />
-              </button>
+              {adapterType === 'union' && (
+                <button
+                  onClick={() => { void extractConditioning() }}
+                  disabled={!inputVideoPath || isExtracting}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3 w-3 ${isExtracting ? 'animate-spin' : ''}`} />
+                </button>
+              )}
             </div>
             <div className="flex-1 bg-black flex items-center justify-center min-h-0 relative">
               {isExtracting && (
@@ -535,12 +639,21 @@ export function ICLoraPanel({
                   <Loader2 className="h-5 w-5 text-blue-400 animate-spin" />
                 </div>
               )}
-              {conditioningPreview ? (
+              {adapterType === 'ingredients' && inputVideoUrl ? (
+                <div className="h-full w-full p-4 flex flex-col items-center justify-center gap-3">
+                  <img src={inputVideoUrl} alt="Reference-sheet conditioning" className="max-w-full max-h-[80%] object-contain" />
+                  <p className="text-[10px] text-zinc-500 text-center">Static 768×448 · 121 frames · identity, clothing, and proportions</p>
+                </div>
+              ) : conditioningPreview ? (
                 <img src={conditioningPreview} alt="Conditioning preview" className="w-full h-full object-contain" />
               ) : (
                 <div className="text-center p-4">
                   <p className="text-zinc-600 text-xs">
-                    {inputVideoUrl ? 'Scrub the input video to see conditioning preview' : 'Import a video to preview conditioning'}
+                    {adapterType === 'ingredients'
+                      ? 'Import a reference sheet to preview character conditioning'
+                      : inputVideoUrl
+                        ? 'Scrub the input video to see conditioning preview'
+                        : 'Import a video to preview conditioning'}
                   </p>
                 </div>
               )}

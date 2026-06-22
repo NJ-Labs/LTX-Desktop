@@ -2,8 +2,10 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { Film, Play, Pause, Volume2, VolumeX, Loader2, Upload, Trash2, RefreshCw } from 'lucide-react'
 import { logger } from '../lib/logger'
 import { fileUrlToPath } from '../lib/url-to-path'
+import { importMediaFile, importMediaPath } from '../lib/media-import'
 
 interface RetakePanelProps {
+  destinationFolder: string
   initialVideoUrl?: string | null
   initialVideoPath?: string | null
   initialDuration?: number
@@ -29,12 +31,8 @@ function formatTimecode(seconds: number): string {
   return `${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`
 }
 
-function pathToFileUrl(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/')
-  return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
-}
-
 export function RetakePanel({
+  destinationFolder,
   initialVideoUrl,
   initialVideoPath,
   initialDuration,
@@ -324,13 +322,14 @@ export function RetakePanel({
       filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'avi', 'webm', 'mkv'] }],
     })
     if (paths && paths.length > 0) {
-      const filePath = paths[0]
-      setVideoPath(filePath)
-      setVideoUrl(pathToFileUrl(filePath))
+      const imported = await importMediaPath(paths[0], destinationFolder)
+      if (!imported) return
+      setVideoPath(imported.path)
+      setVideoUrl(imported.url)
       setThumbnails([])
       extractingRef.current = false
     }
-  }, [])
+  }, [destinationFolder])
 
   const handleClear = useCallback(() => {
     setVideoUrl(null)
@@ -345,7 +344,7 @@ export function RetakePanel({
     initialSelectionAppliedRef.current = false
   }, [])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragOver(false)
 
@@ -368,15 +367,15 @@ export function RetakePanel({
 
     const file = e.dataTransfer.files?.[0]
     if (file) {
-      const filePath = (file as any).path as string | undefined
-      if (filePath) {
-        setVideoPath(filePath)
-        setVideoUrl(pathToFileUrl(filePath))
+      const imported = await importMediaFile(file, destinationFolder)
+      if (imported) {
+        setVideoPath(imported.path)
+        setVideoUrl(imported.url)
         setThumbnails([])
         extractingRef.current = false
       }
     }
-  }, [])
+  }, [destinationFolder])
 
   const selStartFrac = videoDuration > 0 ? selStart / videoDuration : 0
   const selEndFrac = videoDuration > 0 ? selEnd / videoDuration : 1

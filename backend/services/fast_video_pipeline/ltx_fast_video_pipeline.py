@@ -10,21 +10,29 @@ from typing import Any, Final, cast
 import torch
 
 from api_types import ImageConditioningInput
-from services.ltx_pipeline_common import default_tiling_config, encode_video_output, video_chunks_number
+from services.ltx_pipeline_common import (
+    DistilledNativePipeline,
+    default_tiling_config,
+    encode_video_output,
+    video_chunks_number,
+)
 from services.services_utils import AudioOrNone, TilingConfigType, device_supports_fp8
 
 
-def total_denoising_steps() -> int:
+def total_denoising_steps(use_upscaler: bool = True) -> int:
     from ltx_pipelines.utils.constants import DISTILLED_SIGMA_VALUES, STAGE_2_DISTILLED_SIGMA_VALUES
 
-    return (len(DISTILLED_SIGMA_VALUES) - 1) + (len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1)
+    stage_1_steps = len(DISTILLED_SIGMA_VALUES) - 1
+    if not use_upscaler:
+        return stage_1_steps
+    return stage_1_steps + (len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1)
 
 
 StepCallback = Callable[[int, int], None]  # (current_step, total_steps)
 
 
 @contextmanager
-def _tqdm_progress_interceptor(callback: StepCallback) -> Iterator[None]:
+def _tqdm_progress_interceptor(callback: StepCallback, total_steps: int) -> Iterator[None]:
     """Patch tqdm in ltx_pipelines.utils.samplers to forward step updates to callback.
 
     The denoising loops in samplers.py use tqdm directly with no external
@@ -34,8 +42,6 @@ def _tqdm_progress_interceptor(callback: StepCallback) -> Iterator[None]:
     import ltx_pipelines.utils.samplers as _samplers_module
 
     _step_counter: list[int] = [0]
-    total_steps = total_denoising_steps()
-
     original_tqdm = _samplers_module.tqdm
 
     class _ProgressTqdm:
@@ -67,27 +73,45 @@ class LTXFastVideoPipeline:
         checkpoint_path: str,
         gemma_root: str | None,
         upsampler_path: str,
+        use_upscaler: bool,
         device: torch.device,
     ) -> "LTXFastVideoPipeline":
         return LTXFastVideoPipeline(
             checkpoint_path=checkpoint_path,
             gemma_root=gemma_root,
             upsampler_path=upsampler_path,
+            use_upscaler=use_upscaler,
             device=device,
         )
 
-    def __init__(self, checkpoint_path: str, gemma_root: str | None, upsampler_path: str, device: torch.device) -> None:
-        from ltx_core.quantization import QuantizationPolicy
-        from ltx_pipelines.distilled import DistilledPipeline
+    def __init__(
+        self,
+        checkpoint_path: str,
+        gemma_root: str | None,
+        upsampler_path: str,
+        use_upscaler: bool,
+        device: torch.device,
+    ) -> None:
+        self.use_upscaler = use_upscaler
+        if use_upscaler:
+            from ltx_core.quantization import QuantizationPolicy
+            from ltx_pipelines.distilled import DistilledPipeline
 
-        self.pipeline = DistilledPipeline(
-            distilled_checkpoint_path=checkpoint_path,
-            gemma_root=cast(str, gemma_root),
-            spatial_upsampler_path=upsampler_path,
-            loras=[],
-            device=device,
-            quantization=QuantizationPolicy.fp8_cast() if device_supports_fp8(device) else None,
-        )
+            self.pipeline: Any = DistilledPipeline(
+                distilled_checkpoint_path=checkpoint_path,
+                gemma_root=cast(str, gemma_root),
+                spatial_upsampler_path=upsampler_path,
+                loras=[],
+                device=device,
+                quantization=QuantizationPolicy.fp8_cast() if device_supports_fp8(device) else None,
+            )
+        else:
+            self.pipeline = DistilledNativePipeline(
+                checkpoint_path=checkpoint_path,
+                gemma_root=gemma_root,
+                device=device,
+                fp8transformer=device_supports_fp8(device),
+            )
 
     def _run_inference(
         self,
@@ -132,7 +156,7 @@ class LTXFastVideoPipeline:
         del num_inference_steps, negative_prompt  # fast pipeline uses fixed distilled sigmas
         tiling_config = default_tiling_config()
         if progress_callback is not None:
-            with _tqdm_progress_interceptor(progress_callback):
+            with _tqdm_progress_interceptor(progress_callback, total_denoising_steps(self.use_upscaler)):
                 video, audio = self._run_inference(
                     prompt=prompt,
                     seed=seed,

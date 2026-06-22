@@ -133,7 +133,17 @@ class VideoGenerationHandler(StateHandlerBase):
             return self._generate_a2v(req, duration, fps, audio_path=audio_path)
 
         model_type: VideoPipelineModelType = "pro" if req.model == "pro" else "fast"
-        logger.info("Resolution %s - using %s pipeline", resolution, model_type)
+        use_upscaler = (
+            self.state.app_settings.pro_model.use_upscaler
+            if model_type == "pro"
+            else self.state.app_settings.fast_model.use_upscaler
+        )
+        logger.info(
+            "Resolution %s - using %s pipeline (%s)",
+            resolution,
+            model_type,
+            "2-stage upscaler" if use_upscaler else "native resolution",
+        )
 
         RESOLUTION_MAP_16_9: dict[str, tuple[int, int]] = {
             "540p": (960, 544),
@@ -225,7 +235,7 @@ class VideoGenerationHandler(StateHandlerBase):
                 raise RuntimeError("Models not downloaded. Please download the AI models first using the Model Status menu.")
             pro_inference_steps = 0
             from services.fast_video_pipeline.ltx_fast_video_pipeline import total_denoising_steps
-            total_steps = total_denoising_steps()
+            total_steps = total_denoising_steps(self.state.app_settings.fast_model.use_upscaler)
 
         self._generation.update_progress("loading_model", 5, 0, total_steps)
         t_load_start = time.perf_counter()
@@ -449,6 +459,7 @@ class VideoGenerationHandler(StateHandlerBase):
         image_path = normalize_optional_path(req.imagePath)
         has_input_audio = bool(audio_path)
         has_input_image = bool(image_path)
+        ltx_api_base_url = self.state.app_settings.ltx_api_base_url
 
         try:
             self._generation.update_progress("validating_request", 5, None, None)
@@ -495,6 +506,7 @@ class VideoGenerationHandler(StateHandlerBase):
                 audio_uri = self._ltx_api_client.upload_file(
                     api_key=api_key,
                     file_path=str(validated_audio_path),
+                    base_url=ltx_api_base_url,
                 )
                 image_uri: str | None = None
                 if validated_image_path is not None:
@@ -502,6 +514,7 @@ class VideoGenerationHandler(StateHandlerBase):
                     image_uri = self._ltx_api_client.upload_file(
                         api_key=api_key,
                         file_path=str(validated_image_path),
+                        base_url=ltx_api_base_url,
                     )
                 self._generation.update_progress("inference", 55, None, None)
                 video_bytes = self._ltx_api_client.generate_audio_to_video(
@@ -511,6 +524,7 @@ class VideoGenerationHandler(StateHandlerBase):
                     image_uri=image_uri,
                     model=api_model_id,
                     resolution=api_resolution,
+                    base_url=ltx_api_base_url,
                 )
                 self._generation.update_progress("downloading_output", 85, None, None)
             elif has_input_image:
@@ -528,6 +542,7 @@ class VideoGenerationHandler(StateHandlerBase):
                 image_uri = self._ltx_api_client.upload_file(
                     api_key=api_key,
                     file_path=str(validated_image_path),
+                    base_url=ltx_api_base_url,
                 )
                 self._generation.update_progress("inference", 55, None, None)
                 video_bytes = self._ltx_api_client.generate_image_to_video(
@@ -540,6 +555,7 @@ class VideoGenerationHandler(StateHandlerBase):
                     fps=float(fps),
                     generate_audio=generate_audio,
                     camera_motion=req.cameraMotion,
+                    base_url=ltx_api_base_url,
                 )
                 self._generation.update_progress("downloading_output", 85, None, None)
             else:
@@ -561,6 +577,7 @@ class VideoGenerationHandler(StateHandlerBase):
                     fps=float(fps),
                     generate_audio=generate_audio,
                     camera_motion=req.cameraMotion,
+                    base_url=ltx_api_base_url,
                 )
                 self._generation.update_progress("downloading_output", 85, None, None)
 

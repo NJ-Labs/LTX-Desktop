@@ -33,6 +33,7 @@ MODEL_FILE_ORDER: tuple[ModelFileType, ...] = (
     "distilled_lora_384",
     "distilled_lora_384_v11",
     "ic_lora",
+    "ic_lora_ingredients",
     "depth_processor",
     "person_detector",
     "pose_processor",
@@ -105,6 +106,13 @@ DEFAULT_MODEL_DOWNLOAD_SPECS: dict[ModelFileType, ModelFileDownloadSpec] = {
         repo_id="Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control",
         description="Union IC-LoRA control model",
     ),
+    "ic_lora_ingredients": ModelFileDownloadSpec(
+        relative_path=Path("ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors"),
+        expected_size_bytes=1_308_778_338,
+        is_folder=False,
+        repo_id="Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients",
+        description="Ingredients IC-LoRA reference-sheet model",
+    ),
     "depth_processor": ModelFileDownloadSpec(
         relative_path=Path("dpt-hybrid-midas"),
         expected_size_bytes=500_000_000,
@@ -158,6 +166,7 @@ INVENTORY_OPTIONAL_MODEL_TYPES: frozenset[ModelFileType] = frozenset(
         "spatial_upscaler_x15",
         "distilled_lora_384",
         "distilled_lora_384_v11",
+        "ic_lora_ingredients",
     }
 )
 

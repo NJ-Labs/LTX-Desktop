@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Protocol
 
 from services.services_utils import JSONValue, RequestData
@@ -32,8 +32,23 @@ class HttpResponseLike(Protocol):
     def json(self) -> object:
         ...
 
+    def iter_lines(self) -> Iterator[bytes]:
+        ...
+
+    def close(self) -> None:
+        ...
+
 
 class HTTPClient(Protocol):
+    def stream_post(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        json_payload: Mapping[str, JSONValue] | None = None,
+        timeout: int = 30,
+    ) -> HttpResponseLike:
+        ...
+
     def post(
         self,
         url: str,

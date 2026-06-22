@@ -23,7 +23,7 @@ interface SettingsModalProps {
 type TabId = 'general' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, savePromptEnhancerApiKey, forceApiGenerations, offlineMode, serverDataDir } = useAppSettings()
+  const { settings, updateSettings, saveLtxApiConfig, saveFalApiConfig, saveGeminiApiKey, savePromptEnhancerApiKey, forceApiGenerations, offlineMode, serverDataDir } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [ltxApiKeyInput, setLtxApiKeyInput] = useState('')
@@ -860,6 +860,15 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 </p>
 
                 <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
+                  <div className="space-y-2">
+                    <label className="block text-xs text-zinc-300">LTX API base URL</label>
+                    <input
+                      value={settings.ltxApiBaseUrl}
+                      onChange={(e) => updateSettings({ ltxApiBaseUrl: e.target.value })}
+                      placeholder="https://api.ltx.video"
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-500 focus:border-blue-500"
+                    />
+                  </div>
                   <div className="flex gap-2">
                     <LtxApiKeyInput
                       ref={ltxApiKeyInputRef}
@@ -873,7 +882,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       onClick={() => {
                         const trimmed = ltxApiKeyInput.trim()
                         if (!trimmed) return
-                        void saveLtxApiKey(trimmed)
+                        void saveLtxApiConfig(trimmed, settings.ltxApiBaseUrl)
                         setLtxApiKeyInput('')
                       }}
                       disabled={!ltxApiKeyInput.trim()}
@@ -918,6 +927,15 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 </p>
 
                 <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
+                  <div className="space-y-2">
+                    <label className="block text-xs text-zinc-300">FAL API base URL</label>
+                    <input
+                      value={settings.falApiBaseUrl}
+                      onChange={(e) => updateSettings({ falApiBaseUrl: e.target.value })}
+                      placeholder="https://fal.run"
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-500 focus:border-blue-500"
+                    />
+                  </div>
                   <div className="flex gap-2">
                     <LtxApiKeyInput
                       ref={falApiKeyInputRef}
@@ -931,7 +949,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       onClick={() => {
                         const trimmed = falApiKeyInput.trim()
                         if (!trimmed) return
-                        void saveFalApiKey(trimmed)
+                        void saveFalApiConfig(trimmed, settings.falApiBaseUrl)
                         setFalApiKeyInput('')
                       }}
                       disabled={!falApiKeyInput.trim()}

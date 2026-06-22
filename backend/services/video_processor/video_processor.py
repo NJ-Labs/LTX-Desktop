@@ -43,5 +43,17 @@ class VideoProcessor(Protocol):
     def create_writer(self, path: str, fourcc: str, fps: float, size: tuple[int, int]) -> VideoWriterLike:
         ...
 
+    def create_static_video(
+        self,
+        image_path: str,
+        output_path: str,
+        *,
+        width: int,
+        height: int,
+        frame_count: int,
+        fps: float,
+    ) -> None:
+        ...
+
     def release(self, cap_or_writer: VideoCaptureLike | VideoWriterLike) -> None:
         ...

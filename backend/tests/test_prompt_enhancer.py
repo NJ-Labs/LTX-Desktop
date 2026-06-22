@@ -29,6 +29,35 @@ def _configure(test_state, *, base_url: str = BASE_URL, api_key: str = "secret-k
 
 
 class TestEnhancePrompt:
+    def test_streams_openai_content_deltas(self, client, test_state):
+        _configure(test_state)
+        test_state.http.queue(
+            "stream_post",
+            FakeResponse(
+                lines=[
+                    b'data: {"choices":[{"delta":{"content":"A cinematic "}}]}',
+                    b'data: {"choices":[{"delta":{"content":"sunrise."}}]}',
+                    b"data: [DONE]",
+                ]
+            ),
+        )
+
+        with client.stream(
+            "POST",
+            "/api/prompt-enhancer/enhance/stream",
+            json={"prompt": "sunrise", "mode": "video"},
+        ) as response:
+            assert response.status_code == 200
+            assert response.iter_lines() == [
+                '{"delta": "A cinematic "}',
+                '{"delta": "sunrise."}',
+            ]
+
+        call = test_state.http.calls[-1]
+        assert call.method == "stream_post"
+        assert call.json_payload is not None
+        assert call.json_payload["stream"] is True
+
     def test_video_happy_path(self, client, test_state):
         _configure(test_state)
         test_state.http.queue("post", _chat_ok("A lone astronaut drifts past a glowing nebula."))

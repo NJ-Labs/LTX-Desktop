@@ -15,5 +15,6 @@ class ZitAPIClient(Protocol):
         height: int,
         seed: int,
         num_inference_steps: int,
+        base_url: str | None = None,
     ) -> bytes:
         ...

@@ -68,10 +68,15 @@ class ModelsHandler(StateHandlerBase):
         )
 
     def get_models_list(self) -> list[ModelInfo]:
+        fast_upscaler = self.state.app_settings.fast_model.use_upscaler
         pro_steps = self.state.app_settings.pro_model.steps
         pro_upscaler = self.state.app_settings.pro_model.use_upscaler
         return [
-            ModelInfo(id="fast", name="Fast (Distilled)", description="8 steps + 2x upscaler"),
+            ModelInfo(
+                id="fast",
+                name="Fast (Distilled)",
+                description="8 steps" + (" + 2x upscaler" if fast_upscaler else " (native resolution)"),
+            ),
             ModelInfo(
                 id="pro",
                 name="Pro (Full)",

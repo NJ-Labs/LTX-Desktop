@@ -34,6 +34,7 @@ export function installWebElectronShim(): void {
     getBackend: async () => ({ url: browserBackendUrl(), token: '' }),
     getModelsPath: async () => '/models',
     readLocalFile: () => rejectUnsupported('readLocalFile'),
+    getPathForFile: () => '',
     checkGpu: async () => ({ available: false }),
     getAppInfo: async () => ({
       version: 'web',
@@ -62,6 +63,8 @@ export function installWebElectronShim(): void {
     getResourcePath: async () => null,
     getDownloadsPath: async () => '',
     copyToProjectAssets: () => rejectUnsupported('copyToProjectAssets'),
+    importMediaAsset: () => rejectUnsupported('importMediaAsset'),
+    importMediaData: () => rejectUnsupported('importMediaData'),
     getProjectAssetsPath: async () => '',
     openProjectAssetsPathChangeDialog: async () => ({ success: false, error: 'Not available in web mode.' }),
     showSaveDialog: async () => null,

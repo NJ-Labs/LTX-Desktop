@@ -12,7 +12,10 @@ export interface ApiGatewaySection {
   isConfigured: boolean
   inputLabel: string
   placeholder?: string
-  onSave: (apiKey: string) => Promise<void> | void
+  baseUrlLabel?: string
+  baseUrlPlaceholder?: string
+  baseUrlValue?: string
+  onSave: (apiKey: string, baseUrl: string) => Promise<void> | void
   onGetKey?: () => void
   getKeyLabel?: string
 }
@@ -48,15 +51,20 @@ export function ApiGatewayModal({
   blocking = false,
 }: ApiGatewayModalProps) {
   const [values, setValues] = useState<Record<ApiKeyType, string>>({ ltx: '', fal: '' })
+  const [baseUrls, setBaseUrls] = useState<Record<ApiKeyType, string>>({ ltx: '', fal: '' })
   const [isSaving, setIsSaving] = useState<Record<ApiKeyType, boolean>>({ ltx: false, fal: false })
   const [errors, setErrors] = useState<Record<ApiKeyType, string | null>>({ ltx: null, fal: null })
 
   useEffect(() => {
     if (!isOpen) return
     setValues({ ltx: '', fal: '' })
+    setBaseUrls({
+      ltx: sections.find((section) => section.keyType === 'ltx')?.baseUrlValue ?? '',
+      fal: sections.find((section) => section.keyType === 'fal')?.baseUrlValue ?? '',
+    })
     setIsSaving({ ltx: false, fal: false })
     setErrors({ ltx: null, fal: null })
-  }, [isOpen])
+  }, [isOpen, sections])
 
   const allRequiredConfigured = useMemo(() => {
     const requiredSections = sections.filter((section) => section.required)
@@ -86,15 +94,20 @@ export function ApiGatewayModal({
   const handleSave = async (section: ApiGatewaySection) => {
     const keyType = section.keyType
     const trimmedKey = (values[keyType] ?? '').trim()
+    const trimmedBaseUrl = (baseUrls[keyType] ?? '').trim()
     if (!trimmedKey) {
       setErrors((prev) => ({ ...prev, [keyType]: `Please enter a valid ${section.inputLabel}.` }))
+      return
+    }
+    if (!trimmedBaseUrl) {
+      setErrors((prev) => ({ ...prev, [keyType]: `Please enter a valid ${section.baseUrlLabel ?? 'API base URL'}.` }))
       return
     }
 
     setIsSaving((prev) => ({ ...prev, [keyType]: true }))
     setErrors((prev) => ({ ...prev, [keyType]: null }))
     try {
-      await section.onSave(trimmedKey)
+      await section.onSave(trimmedKey, trimmedBaseUrl)
       setValues((prev) => ({ ...prev, [keyType]: '' }))
     } catch (err) {
       if (err instanceof Error && err.message.trim()) {
@@ -142,8 +155,9 @@ export function ApiGatewayModal({
               const configured = section.isConfigured
               const saving = isSaving[section.keyType]
               const value = values[section.keyType] ?? ''
+              const baseUrl = baseUrls[section.keyType] ?? ''
               const error = errors[section.keyType]
-              const canSubmit = value.trim().length > 0 && !saving
+              const canSubmit = value.trim().length > 0 && baseUrl.trim().length > 0 && !saving
 
               return (
                 <div key={section.keyType} className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
@@ -166,6 +180,14 @@ export function ApiGatewayModal({
                   {!configured && (
                     <div className="space-y-2">
                       <label className="block text-xs text-zinc-300">{section.inputLabel}</label>
+                      <label className="block text-xs text-zinc-300">{section.baseUrlLabel ?? 'API base URL'}</label>
+                      <input
+                        type="url"
+                        value={baseUrl}
+                        onChange={(event) => setBaseUrls((prev) => ({ ...prev, [section.keyType]: event.target.value }))}
+                        placeholder={section.baseUrlPlaceholder ?? 'https://example.com'}
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-500 focus:border-blue-500"
+                      />
                       <div className="flex gap-2">
                         <LtxApiKeyInput
                           value={value}

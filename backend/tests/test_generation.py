@@ -156,6 +156,33 @@ class TestGenerate:
         assert call["width"] == 3840
         assert call["height"] == 2176
 
+    def test_fast_pipeline_respects_upscaler_setting(
+        self, client, test_state, fake_services, create_fake_model_files
+    ):
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+        test_state.state.app_settings.fast_model.use_upscaler = False
+
+        r = client.post("/api/generate", json=_T2V_JSON)
+
+        assert r.status_code == 200
+        assert fake_services.fast_video_pipeline.use_upscaler is False
+        assert fake_services.fast_video_pipeline.create_calls == [False]
+
+    def test_fast_pipeline_reloads_when_upscaler_setting_changes(
+        self, client, test_state, fake_services, create_fake_model_files
+    ):
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+        test_state.state.app_settings.fast_model.use_upscaler = False
+        assert client.post("/api/generate", json=_T2V_JSON).status_code == 200
+
+        test_state.state.app_settings.fast_model.use_upscaler = True
+        assert client.post("/api/generate", json=_T2V_JSON).status_code == 200
+
+        assert fake_services.fast_video_pipeline.use_upscaler is True
+        assert fake_services.fast_video_pipeline.create_calls == [False, True]
+
     def test_locked_seed(self, client, test_state, fake_services, create_fake_model_files):
         create_fake_model_files()
         _enable_local_text_encoding(test_state)
@@ -504,6 +531,7 @@ class TestForcedApiGenerate:
     def test_t2v_routes_to_ltx_api(self, client, test_state, fake_services):
         test_state.config.force_api_generations = True
         test_state.state.app_settings.ltx_api_key = "api-key"
+        test_state.state.app_settings.ltx_api_base_url = "https://openai.example/v1"
 
         r = client.post(
             "/api/generate",
@@ -528,6 +556,7 @@ class TestForcedApiGenerate:
         assert call["fps"] == 50.0
         assert call["generate_audio"] is True
         assert call["camera_motion"] == "dolly_in"
+        assert call["base_url"] == "https://openai.example/v1"
 
     def test_i2v_routes_to_ltx_api(self, client, test_state, fake_services, make_test_image, tmp_path):
         test_state.config.force_api_generations = True
@@ -1120,6 +1149,7 @@ class TestForcedApiGenerateImage:
     def test_generate_image_routes_to_zit_api(self, client, test_state, fake_services):
         test_state.config.force_api_generations = True
         test_state.state.app_settings.fal_api_key = "fal-key"
+        test_state.state.app_settings.fal_api_base_url = "https://fal-proxy.example"
 
         r = client.post(
             "/api/generate-image",
@@ -1131,6 +1161,7 @@ class TestForcedApiGenerateImage:
         assert data["status"] == "complete"
         assert len(data["image_paths"]) == 2
         assert len(fake_services.zit_api_client.text_to_image_calls) == 2
+        assert fake_services.zit_api_client.text_to_image_calls[0]["base_url"] == "https://fal-proxy.example"
         assert len(fake_services.image_generation_pipeline.generate_calls) == 0
 
     def test_generate_image_missing_fal_key(self, client, test_state, fake_services):

@@ -40,6 +40,14 @@ class TestModelsList:
         r = client.get("/api/models")
         assert "30 steps" in r.json()[1]["description"]
 
+    def test_fast_description_reflects_upscaler_setting(self, client, test_state):
+        test_state.state.app_settings.fast_model.use_upscaler = False
+
+        r = client.get("/api/models")
+
+        assert r.status_code == 200
+        assert "native resolution" in r.json()[0]["description"]
+
 
 class TestModelsStatus:
     def test_nothing_downloaded(self, client):

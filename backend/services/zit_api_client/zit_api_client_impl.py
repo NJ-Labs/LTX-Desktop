@@ -29,6 +29,7 @@ class ZitAPIClientImpl:
         height: int,
         seed: int,
         num_inference_steps: int,
+        base_url: str | None = None,
     ) -> bytes:
         payload: dict[str, JSONValue] = {
             "prompt": prompt,
@@ -44,6 +45,7 @@ class ZitAPIClientImpl:
             endpoint=FAL_TEXT_TO_IMAGE_ENDPOINT,
             api_key=api_key,
             payload=payload,
+            base_url=base_url,
         )
 
     def _submit_and_download(
@@ -52,9 +54,11 @@ class ZitAPIClientImpl:
         endpoint: str,
         api_key: str,
         payload: dict[str, JSONValue],
+        base_url: str | None = None,
     ) -> bytes:
+        resolved_base_url = (base_url or self._base_url).rstrip("/")
         response = self._http.post(
-            f"{self._base_url}{endpoint}",
+            f"{resolved_base_url}{endpoint}",
             headers=self._json_headers(api_key),
             json_payload=payload,
             timeout=180,

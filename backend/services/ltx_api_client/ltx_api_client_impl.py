@@ -57,6 +57,9 @@ class LTXAPIClientImpl:
         self._http = http
         self._base_url = ltx_api_base_url.rstrip("/")
 
+    def _resolve_base_url(self, base_url: str | None) -> str:
+        return (base_url or self._base_url).rstrip("/")
+
     def generate_text_to_video(
         self,
         *,
@@ -68,7 +71,9 @@ class LTXAPIClientImpl:
         fps: float,
         generate_audio: bool,
         camera_motion: VideoCameraMotion = "none",
+        base_url: str | None = None,
     ) -> bytes:
+        resolved_base_url = self._resolve_base_url(base_url)
         payload: dict[str, JSONValue] = {
             "prompt": prompt,
             "model": model,
@@ -81,7 +86,7 @@ class LTXAPIClientImpl:
         if mapped_camera_motion is not None:
             payload["camera_motion"] = mapped_camera_motion
         response = self._http.post(
-            f"{self._base_url}/v1/text-to-video",
+            f"{resolved_base_url}/v1/text-to-video",
             headers=self._json_headers(api_key),
             json_payload=payload,
             timeout=1200,
@@ -100,7 +105,9 @@ class LTXAPIClientImpl:
         fps: float,
         generate_audio: bool,
         camera_motion: VideoCameraMotion = "none",
+        base_url: str | None = None,
     ) -> bytes:
+        resolved_base_url = self._resolve_base_url(base_url)
         payload: dict[str, JSONValue] = {
             "prompt": prompt,
             "image_uri": image_uri,
@@ -114,7 +121,7 @@ class LTXAPIClientImpl:
         if mapped_camera_motion is not None:
             payload["camera_motion"] = mapped_camera_motion
         response = self._http.post(
-            f"{self._base_url}/v1/image-to-video",
+            f"{resolved_base_url}/v1/image-to-video",
             headers=self._json_headers(api_key),
             json_payload=payload,
             timeout=1200,
@@ -130,7 +137,9 @@ class LTXAPIClientImpl:
         image_uri: str | None,
         model: str,
         resolution: str,
+        base_url: str | None = None,
     ) -> bytes:
+        resolved_base_url = self._resolve_base_url(base_url)
         payload: dict[str, JSONValue] = {
             "prompt": prompt,
             "audio_uri": audio_uri,
@@ -140,7 +149,7 @@ class LTXAPIClientImpl:
         if image_uri is not None:
             payload["image_uri"] = image_uri
         response = self._http.post(
-            f"{self._base_url}/v1/audio-to-video",
+            f"{resolved_base_url}/v1/audio-to-video",
             headers=self._json_headers(api_key),
             json_payload=payload,
             timeout=1200,
@@ -156,9 +165,10 @@ class LTXAPIClientImpl:
         duration: float,
         prompt: str,
         mode: str,
+        base_url: str | None = None,
     ) -> LTXRetakeResult:
         try:
-            storage_uri = self.upload_file(api_key=api_key, file_path=video_path)
+            storage_uri = self.upload_file(api_key=api_key, file_path=video_path, base_url=base_url)
         except LTXAPIClientError as exc:
             if exc.stage == "upload_init":
                 err_text = self._extract_error_detail(exc.detail)
@@ -170,6 +180,7 @@ class LTXAPIClientImpl:
                 raise LTXAPIClientError(500, f"Video upload failed: {err_text}") from exc
             raise
 
+        resolved_base_url = self._resolve_base_url(base_url)
         payload: dict[str, JSONValue] = {
             "video_uri": storage_uri,
             "start_time": float(start_time),
@@ -180,7 +191,7 @@ class LTXAPIClientImpl:
             payload["prompt"] = prompt
 
         response = self._http.post(
-            f"{self._base_url}/v1/retake",
+            f"{resolved_base_url}/v1/retake",
             headers=self._json_headers(api_key),
             json_payload=payload,
             timeout=600,
@@ -218,9 +229,10 @@ class LTXAPIClientImpl:
         error_text = response.text[:500] if response.text else "Unknown error"
         raise LTXAPIClientError(response.status_code, f"Retake API error: {error_text}{rid}")
 
-    def upload_file(self, *, file_path: str, api_key: str) -> str:
+    def upload_file(self, *, file_path: str, api_key: str, base_url: str | None = None) -> str:
+        resolved_base_url = self._resolve_base_url(base_url)
         upload_resp = self._http.post(
-            f"{self._base_url}/v1/upload",
+            f"{resolved_base_url}/v1/upload",
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=30,
         )

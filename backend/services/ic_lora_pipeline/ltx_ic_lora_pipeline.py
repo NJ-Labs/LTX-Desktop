@@ -19,6 +19,7 @@ class LTXIcLoraPipeline:
         gemma_root: str | None,
         upsampler_path: str,
         lora_path: str,
+        lora_strength: float,
         device: torch.device,
     ) -> "LTXIcLoraPipeline":
         return LTXIcLoraPipeline(
@@ -26,6 +27,7 @@ class LTXIcLoraPipeline:
             gemma_root=gemma_root,
             upsampler_path=upsampler_path,
             lora_path=lora_path,
+            lora_strength=lora_strength,
             device=device,
         )
 
@@ -35,6 +37,7 @@ class LTXIcLoraPipeline:
         gemma_root: str | None,
         upsampler_path: str,
         lora_path: str,
+        lora_strength: float,
         device: torch.device,
     ) -> None:
         from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
@@ -42,7 +45,11 @@ class LTXIcLoraPipeline:
         from ltx_core.quantization import QuantizationPolicy
         from ltx_pipelines.ic_lora import ICLoraPipeline
 
-        lora_entry = LoraPathStrengthAndSDOps(path=lora_path, strength=1.0, sd_ops=LTXV_LORA_COMFY_RENAMING_MAP)
+        lora_entry = LoraPathStrengthAndSDOps(
+            path=lora_path,
+            strength=lora_strength,
+            sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
+        )
         self.pipeline = ICLoraPipeline(
             distilled_checkpoint_path=checkpoint_path,
             spatial_upsampler_path=upsampler_path,
@@ -62,6 +69,7 @@ class LTXIcLoraPipeline:
         frame_rate: float,
         images: list[ImageConditioningInput],
         video_conditioning: list[tuple[str, float]],
+        conditioning_attention_strength: float,
         tiling_config: TilingConfigType,
     ) -> tuple[torch.Tensor | Iterator[torch.Tensor], AudioOrNone]:
         from ltx_pipelines.utils.args import ImageConditioningInput as _LtxImageInput
@@ -75,6 +83,7 @@ class LTXIcLoraPipeline:
             frame_rate=frame_rate,
             images=[_LtxImageInput(img.path, img.frame_idx, img.strength) for img in images],
             video_conditioning=video_conditioning,
+            conditioning_attention_strength=conditioning_attention_strength,
             tiling_config=tiling_config,
         )
 
@@ -89,6 +98,7 @@ class LTXIcLoraPipeline:
         frame_rate: float,
         images: list[ImageConditioningInput],
         video_conditioning: list[tuple[str, float]],
+        conditioning_attention_strength: float,
         output_path: str,
     ) -> None:
         tiling_config = default_tiling_config()
@@ -101,6 +111,7 @@ class LTXIcLoraPipeline:
             frame_rate=frame_rate,
             images=images,
             video_conditioning=video_conditioning,
+            conditioning_attention_strength=conditioning_attention_strength,
             tiling_config=tiling_config,
         )
         chunks = video_chunks_number(num_frames, tiling_config)

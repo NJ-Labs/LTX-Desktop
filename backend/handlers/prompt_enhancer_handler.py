@@ -9,7 +9,9 @@ vLLM), this feature also works in offline / air-gapped deployments.
 from __future__ import annotations
 
 import logging
+import json
 import re
+from collections.abc import Iterator
 from threading import RLock
 from typing import TYPE_CHECKING
 
@@ -215,6 +217,62 @@ class PromptEnhancerHandler(StateHandlerBase):
         if not enhanced:
             raise HTTPError(502, "PROMPT_ENHANCER_EMPTY_RESPONSE")
         return EnhancePromptResponse(status="success", enhanced_prompt=enhanced)
+
+    def enhance_stream(self, req: EnhancePromptRequest) -> Iterator[str]:
+        settings = self.state.app_settings
+        base_url = settings.prompt_enhancer_base_url.strip()
+        if not base_url:
+            raise HTTPError(400, "PROMPT_ENHANCER_NOT_CONFIGURED")
+
+        payload: dict[str, JSONValue] = {
+            "model": settings.prompt_enhancer_model.strip() or "local-model",
+            "messages": [
+                {"role": "system", "content": _system_prompt_for(req.mode)},
+                {"role": "user", "content": req.prompt},
+            ],
+            "temperature": 0.7,
+            "max_tokens": 16384,
+            "stream": True,
+        }
+        headers = {"Content-Type": "application/json"}
+        api_key = settings.prompt_enhancer_api_key.strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        try:
+            response = self._http.stream_post(
+                _chat_completions_url(base_url), headers=headers, json_payload=payload, timeout=60
+            )
+        except HttpTimeoutError as exc:
+            raise HTTPError(504, "PROMPT_ENHANCER_TIMEOUT") from exc
+        except Exception as exc:
+            raise HTTPError(502, f"PROMPT_ENHANCER_REQUEST_FAILED: {exc}") from exc
+
+        if response.status_code != 200:
+            detail = response.text
+            response.close()
+            raise HTTPError(response.status_code, f"Prompt enhancer error: {detail}")
+
+        def chunks() -> Iterator[str]:
+            try:
+                for line in response.iter_lines():
+                    decoded = line.decode("utf-8").strip()
+                    if not decoded or not decoded.startswith("data:"):
+                        continue
+                    data = decoded[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data)
+                        delta = event["choices"][0]["delta"].get("content")
+                    except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
+                        continue
+                    if isinstance(delta, str) and delta:
+                        yield json.dumps({"delta": delta}) + "\n"
+            finally:
+                response.close()
+
+        return chunks()
 
     def test_connection(self, req: TestPromptEnhancerRequest) -> TestPromptEnhancerResponse:
         settings = self.state.app_settings

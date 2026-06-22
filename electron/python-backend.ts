@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { getAppDataDir } from './app-paths'
+import { getProjectAssetsPath } from './app-state'
 import { getCurrentDir, isDev } from './config'
 import { logger, writeLog } from './logger'
 import { getCurrentLogFilename } from './logging-management'
@@ -248,6 +249,7 @@ export async function startPythonBackend(): Promise<void> {
         // Only pass LTX_PORT when the developer explicitly set it
         ...(process.env.LTX_PORT ? { LTX_PORT: process.env.LTX_PORT } : {}),
         LTX_AUTH_TOKEN: authToken,
+        LTX_MEDIA_ROOT: getProjectAssetsPath(),
         LTX_ADMIN_TOKEN: adminToken,
         LTX_LOG_FILE: getCurrentLogFilename(),
         LTX_APP_DATA_DIR: getAppDataDir(),

@@ -6,6 +6,9 @@ from typing import Any, TypeGuard, TypeVar, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
+DEFAULT_LTX_API_BASE_URL = "https://api.ltx.video"
+DEFAULT_FAL_API_BASE_URL = "https://fal.run"
+
 
 def _to_camel_case(field_name: str) -> str:
     special_aliases = {
@@ -29,6 +32,13 @@ def _clamp_int(value: Any, minimum: int, maximum: int, default: int) -> int:
 
 def _default_local_duration_caps() -> dict[str, int]:
     return {"540p": 20, "720p": 10, "1080p": 5, "1440p": 5, "2160p": 5}
+
+
+def _normalize_base_url(value: Any, *, default: str) -> str:
+    if value is None:
+        return default
+    normalized = str(value).strip().rstrip("/")
+    return normalized or default
 
 
 class SettingsBaseModel(BaseModel):
@@ -67,8 +77,10 @@ class AppSettings(SettingsBaseModel):
     use_torch_compile: bool = False
     load_on_startup: bool = False
     ltx_api_key: str = ""
+    ltx_api_base_url: str = DEFAULT_LTX_API_BASE_URL
     user_prefers_ltx_api_video_generations: bool = False
     fal_api_key: str = ""
+    fal_api_base_url: str = DEFAULT_FAL_API_BASE_URL
     use_local_text_encoder: bool = False
     fast_model: FastModelSettings = Field(default_factory=FastModelSettings)
     pro_model: ProModelSettings = Field(default_factory=ProModelSettings)
@@ -107,6 +119,16 @@ class AppSettings(SettingsBaseModel):
             if isinstance(key, str) and key in defaults:
                 result[key] = _clamp_int(cap, minimum=1, maximum=600, default=defaults[key])
         return result
+
+    @field_validator("ltx_api_base_url", mode="before")
+    @classmethod
+    def _normalize_ltx_api_base_url(cls, value: Any) -> str:
+        return _normalize_base_url(value, default=DEFAULT_LTX_API_BASE_URL)
+
+    @field_validator("fal_api_base_url", mode="before")
+    @classmethod
+    def _normalize_fal_api_base_url(cls, value: Any) -> str:
+        return _normalize_base_url(value, default=DEFAULT_FAL_API_BASE_URL)
 
 
 SettingsModelT = TypeVar("SettingsModelT", bound=SettingsBaseModel)
@@ -157,8 +179,10 @@ class SettingsResponse(SettingsBaseModel):
     use_torch_compile: bool = False
     load_on_startup: bool = False
     has_ltx_api_key: bool = False
+    ltx_api_base_url: str = DEFAULT_LTX_API_BASE_URL
     user_prefers_ltx_api_video_generations: bool = False
     has_fal_api_key: bool = False
+    fal_api_base_url: str = DEFAULT_FAL_API_BASE_URL
     use_local_text_encoder: bool = False
     fast_model: FastModelSettings = Field(default_factory=FastModelSettings)
     pro_model: ProModelSettings = Field(default_factory=ProModelSettings)

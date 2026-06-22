@@ -202,6 +202,7 @@ class ImageGenerationHandler(StateHandlerBase):
                     height=height,
                     seed=seed + idx,
                     num_inference_steps=num_inference_steps,
+                    base_url=settings.fal_api_base_url,
                 )
 
                 if self._generation.is_generation_cancelled():

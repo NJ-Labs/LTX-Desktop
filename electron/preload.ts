@@ -1,5 +1,5 @@
 // Using require for Electron preload compatibility
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 // Expose protected methods to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Read a local file and return as base64
   readLocalFile: (filePath: string): Promise<{ data: string; mimeType: string }> => 
     ipcRenderer.invoke('read-local-file', filePath),
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   
   // Check GPU availability
   checkGpu: (): Promise<{ available: boolean; name?: string; vram?: number }> =>
@@ -49,6 +50,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Project assets
   copyToProjectAssets: (srcPath: string, projectId: string): Promise<{ success: boolean; path?: string; url?: string; error?: string }> =>
     ipcRenderer.invoke('copy-to-project-assets', srcPath, projectId),
+  importMediaAsset: (srcPath: string, folder: string): Promise<{ success: boolean; path?: string; url?: string; error?: string }> =>
+    ipcRenderer.invoke('import-media-asset', srcPath, folder),
+  importMediaData: (fileName: string, data: ArrayBuffer, folder: string): Promise<{ success: boolean; path?: string; url?: string; error?: string }> =>
+    ipcRenderer.invoke('import-media-data', fileName, data, folder),
   getProjectAssetsPath: (): Promise<string> =>
     ipcRenderer.invoke('get-project-assets-path'),
   openProjectAssetsPathChangeDialog: (): Promise<{ success: boolean; path?: string; error?: string }> =>
@@ -145,6 +150,7 @@ declare global {
       getBackend: () => Promise<{ url: string; token: string }>
       getModelsPath: () => Promise<string>
       readLocalFile: (filePath: string) => Promise<{ data: string; mimeType: string }>
+      getPathForFile: (file: File) => string
       checkGpu: () => Promise<{ available: boolean; name?: string; vram?: number }>
       getAppInfo: () => Promise<{ version: string; isPackaged: boolean; modelsPath: string; userDataPath: string }>
       checkFirstRun: () => Promise<{ needsSetup: boolean; needsLicense: boolean }>
@@ -161,6 +167,8 @@ declare global {
       getResourcePath: () => Promise<string | null>
       getDownloadsPath: () => Promise<string>
       copyToProjectAssets: (srcPath: string, projectId: string) => Promise<{ success: boolean; path?: string; url?: string; error?: string }>
+      importMediaAsset: (srcPath: string, folder: string) => Promise<{ success: boolean; path?: string; url?: string; error?: string }>
+      importMediaData: (fileName: string, data: ArrayBuffer, folder: string) => Promise<{ success: boolean; path?: string; url?: string; error?: string }>
       getProjectAssetsPath: () => Promise<string>
       openProjectAssetsPathChangeDialog: () => Promise<{ success: boolean; path?: string; error?: string }>
       showSaveDialog: (options: { title?: string; defaultPath?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>

@@ -63,6 +63,7 @@ def test_downloading_path_is_derived_from_specs(tmp_path):
 
     assert resolve_downloading_path(models_dir, specs, "checkpoint") == downloading_dir
     assert resolve_downloading_path(models_dir, specs, "ic_lora") == downloading_dir
+    assert resolve_downloading_path(models_dir, specs, "ic_lora_ingredients") == downloading_dir
     assert resolve_downloading_path(models_dir, specs, "depth_processor") == downloading_dir / "dpt-hybrid-midas"
     assert resolve_downloading_path(models_dir, specs, "person_detector") == downloading_dir
     assert resolve_downloading_path(models_dir, specs, "pose_processor") == downloading_dir

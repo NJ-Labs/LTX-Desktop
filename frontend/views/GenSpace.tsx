@@ -11,7 +11,7 @@ import { useAppSettings } from '../contexts/AppSettingsContext'
 import { useGeneration } from '../hooks/use-generation'
 import { useRetake } from '../hooks/use-retake'
 import { useIcLora } from '../hooks/use-ic-lora'
-import type { ICLoraConditioningType } from '../components/ICLoraPanel'
+import type { ICLoraAdapterType, ICLoraConditioningType } from '../components/ICLoraPanel'
 import type { Asset } from '../types/project'
 import { GenerationErrorDialog } from '../components/GenerationErrorDialog'
 import { HeavyGenerationWarningDialog } from '../components/HeavyGenerationWarningDialog'
@@ -27,11 +27,12 @@ import {
 import { clampLocalDuration, getLocalDurationOptions, LOCAL_RESOLUTIONS, LOCAL_VIDEO_FPS } from '../lib/local-video-options'
 import { logger } from '../lib/logger'
 import { RetakePanel } from '../components/RetakePanel'
-import { ICLoraPanel, CONDITIONING_TYPES } from '../components/ICLoraPanel'
+import { ICLoraPanel, CONDITIONING_TYPES, IC_LORA_ADAPTERS } from '../components/ICLoraPanel'
 import { FreeApiKeyBubble } from '../components/FreeApiKeyBubble'
 import { Tooltip } from '../components/ui/tooltip'
 import { EnhanceIcon } from '../components/EnhanceIcon'
 import { usePromptEnhancer } from '../hooks/use-prompt-enhancer'
+import { importMediaFile } from '../lib/media-import'
 
 // Asset card with hover overlays
 function AssetCard({
@@ -414,6 +415,8 @@ function PromptBar({
   buttonIcon,
   icLoraCondType,
   onIcLoraCondTypeChange,
+  icLoraAdapterType,
+  onIcLoraAdapterTypeChange,
   icLoraStrength,
   onIcLoraStrengthChange,
   batchCount,
@@ -422,6 +425,7 @@ function PromptBar({
   promptEnhancerAvailable,
   isEnhancingPrompt,
   onEnhancePrompt,
+  destinationFolder,
 }: {
   mode: 'image' | 'video' | 'retake' | 'ic-lora'
   onModeChange: (mode: 'image' | 'video' | 'retake' | 'ic-lora') => void
@@ -453,6 +457,8 @@ function PromptBar({
   shouldVideoGenerateWithLtxApi: boolean
   icLoraCondType?: ICLoraConditioningType
   onIcLoraCondTypeChange?: (type: ICLoraConditioningType) => void
+  icLoraAdapterType?: ICLoraAdapterType
+  onIcLoraAdapterTypeChange?: (type: ICLoraAdapterType) => void
   icLoraStrength?: number
   onIcLoraStrengthChange?: (strength: number) => void
   batchCount: number
@@ -461,6 +467,7 @@ function PromptBar({
   promptEnhancerAvailable: boolean
   isEnhancingPrompt: boolean
   onEnhancePrompt: () => void
+  destinationFolder: string
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
@@ -494,7 +501,7 @@ function PromptBar({
     }
   }
 
-  const handleAudioDrop = (e: React.DragEvent) => {
+  const handleAudioDrop = async (e: React.DragEvent) => {
     e.preventDefault()
     setIsAudioDragOver(false)
 
@@ -511,41 +518,25 @@ function PromptBar({
     if (file) {
       const ext = file.name.split('.').pop()?.toLowerCase()
       if (['mp3', 'wav', 'ogg', 'aac', 'flac', 'm4a'].includes(ext || '')) {
-        const filePath = (file as any).path as string | undefined
-        if (filePath) {
-          const normalized = filePath.replace(/\\/g, '/')
-          const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
-          onInputAudioChange(fileUrl)
-        }
+        const imported = await importMediaFile(file, destinationFolder)
+        if (imported) onInputAudioChange(imported.url)
       }
     }
   }
 
-  const handleAudioFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAudioFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
-      const filePath = (file as any).path as string | undefined
-      if (filePath) {
-        const normalized = filePath.replace(/\\/g, '/')
-        const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
-        onInputAudioChange(fileUrl)
-      }
+      const imported = await importMediaFile(file, destinationFolder)
+      if (imported) onInputAudioChange(imported.url)
     }
   }
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file && file.type.startsWith('image/')) {
-      // In Electron, File objects have a .path property with the full filesystem path
-      const filePath = (file as any).path as string | undefined
-      if (filePath) {
-        const normalized = filePath.replace(/\\/g, '/')
-        const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
-        onInputImageChange(fileUrl)
-      } else {
-        const url = URL.createObjectURL(file)
-        onInputImageChange(url)
-      }
+      const imported = await importMediaFile(file, destinationFolder)
+      if (imported) onInputImageChange(imported.url)
     }
   }
   
@@ -638,7 +629,9 @@ function PromptBar({
             placeholder={mode === 'retake'
               ? "Describe what should happen in the selected section..."
               : mode === 'ic-lora'
-                ? "Describe the style or transformation to apply..."
+                ? icLoraAdapterType === 'ingredients'
+                  ? "Describe the character's action, camera, and scene..."
+                  : "Describe the character, action, and visual treatment..."
               : mode === 'image'
                 ? "A close-up of a woman talking on the phone..."
                 : "The woman sips from a cup of coffee..."
@@ -678,18 +671,37 @@ function PromptBar({
         ) : isIcLora ? (
           <>
             <SettingsDropdown
-              title="CONDITIONING TYPE"
-              value={icLoraCondType || 'canny'}
-              onChange={(v) => onIcLoraCondTypeChange?.(v as ICLoraConditioningType)}
-              options={CONDITIONING_TYPES.map(ct => ({ value: ct.value, label: ct.label }))}
+              title="CHARACTER METHOD"
+              value={icLoraAdapterType || 'union'}
+              onChange={(v) => onIcLoraAdapterTypeChange?.(v as ICLoraAdapterType)}
+              options={IC_LORA_ADAPTERS.map(adapter => ({ value: adapter.value, label: adapter.label }))}
               trigger={
                 <>
-                  <span className="text-zinc-300 font-medium">{CONDITIONING_TYPES.find(ct => ct.value === icLoraCondType)?.label || 'Canny Edges'}</span>
+                  <span className="text-zinc-300 font-medium">
+                    {IC_LORA_ADAPTERS.find(adapter => adapter.value === icLoraAdapterType)?.label || 'Motion Control'}
+                  </span>
                   <ChevronUp className="h-3 w-3 text-zinc-500" />
                 </>
               }
             />
             <div className="w-px h-4 bg-zinc-700 mx-0.5" />
+            {icLoraAdapterType !== 'ingredients' && (
+              <>
+                <SettingsDropdown
+                  title="CONDITIONING TYPE"
+                  value={icLoraCondType || 'canny'}
+                  onChange={(v) => onIcLoraCondTypeChange?.(v as ICLoraConditioningType)}
+                  options={CONDITIONING_TYPES.map(ct => ({ value: ct.value, label: ct.label }))}
+                  trigger={
+                    <>
+                      <span className="text-zinc-300 font-medium">{CONDITIONING_TYPES.find(ct => ct.value === icLoraCondType)?.label || 'Canny Edges'}</span>
+                      <ChevronUp className="h-3 w-3 text-zinc-500" />
+                    </>
+                  }
+                />
+                <div className="w-px h-4 bg-zinc-700 mx-0.5" />
+              </>
+            )}
             <SettingsDropdown
               title="STRENGTH"
               value={String(icLoraStrength ?? 1.0)}
@@ -1040,8 +1052,10 @@ export function GenSpace() {
     prompt: string
     input: {
       videoPath: string
+      adapterType: ICLoraAdapterType
       conditioningType: ICLoraConditioningType
       conditioningStrength: number
+      anchorImagePath: string | null
     }
   } | null>(null)
   const [settings, setSettings] = useState(() => ({ ...DEFAULT_VIDEO_SETTINGS }))
@@ -1106,12 +1120,15 @@ export function GenSpace() {
   const [icLoraInput, setIcLoraInput] = useState({
     videoUrl: null as string | null,
     videoPath: null as string | null,
+    adapterType: 'union' as ICLoraAdapterType,
     conditioningType: 'canny' as ICLoraConditioningType,
     conditioningStrength: 1.0,
+    anchorImagePath: null as string | null,
     ready: false,
   })
   const [icLoraPanelKey, setIcLoraPanelKey] = useState(0)
   const [icLoraCondType, setIcLoraCondType] = useState<ICLoraConditioningType>('canny')
+  const [icLoraAdapterType, setIcLoraAdapterType] = useState<ICLoraAdapterType>('union')
   const [icLoraStrength, setIcLoraStrength] = useState(1.0)
   const [icLoraInitial, setIcLoraInitial] = useState<{
     videoUrl: string | null
@@ -1139,7 +1156,7 @@ export function GenSpace() {
       return
     }
     if (!prompt.trim() || isEnhancingPrompt) return
-    const enhanced = await enhancePrompt(prompt, mode === 'image' ? 'image' : 'video')
+    const enhanced = await enhancePrompt(prompt, mode === 'image' ? 'image' : 'video', setPrompt)
     if (enhanced) setPrompt(enhanced)
   }, [promptEnhancerConfigured, prompt, isEnhancingPrompt, enhancePrompt, mode])
   
@@ -1395,8 +1412,10 @@ export function GenSpace() {
             audio: false,
             cameraMotion: 'none',
             icLoraVideoPath: submission.input.videoPath,
+            icLoraAdapterType: submission.input.adapterType,
             icLoraConditioningType: submission.input.conditioningType,
             icLoraConditioningStrength: submission.input.conditioningStrength,
+            icLoraAnchorImagePath: submission.input.anchorImagePath || undefined,
           },
           takes: [{ url: finalUrl, path: finalPath, createdAt: Date.now() }],
           activeTakeIndex: 0,
@@ -1477,14 +1496,18 @@ export function GenSpace() {
         prompt,
         input: {
           videoPath: icLoraInput.videoPath,
+          adapterType: icLoraAdapterType,
           conditioningType: icLoraCondType,
           conditioningStrength: icLoraStrength,
+          anchorImagePath: icLoraInput.anchorImagePath,
         },
       }
       await submitIcLora({
         videoPath: icLoraInput.videoPath,
+        adapterType: icLoraAdapterType,
         conditioningType: icLoraCondType,
         conditioningStrength: icLoraStrength,
+        anchorImagePath: icLoraInput.anchorImagePath,
         prompt,
       })
       return
@@ -1862,6 +1885,7 @@ export function GenSpace() {
       {mode === 'retake' && (
         <div className="absolute inset-x-0 top-0 bottom-[160px] px-4 pt-4 pb-4 flex flex-col overflow-hidden">
           <RetakePanel
+            destinationFolder={currentProjectId || 'playground'}
             initialVideoUrl={retakeInitial.videoUrl}
             initialVideoPath={retakeInitial.videoPath}
             initialDuration={retakeInitial.duration}
@@ -1877,6 +1901,7 @@ export function GenSpace() {
       {mode === 'ic-lora' && !forceApiGenerations && (
         <div className="absolute inset-x-0 top-0 bottom-[160px] px-4 pt-4 pb-4 flex flex-col overflow-hidden">
           <ICLoraPanel
+            destinationFolder={currentProjectId || 'playground'}
             initialVideoUrl={icLoraInitial.videoUrl}
             initialVideoPath={icLoraInitial.videoPath}
             resetKey={icLoraPanelKey}
@@ -1885,6 +1910,8 @@ export function GenSpace() {
             processingStatus={icLoraStatus}
             conditioningType={icLoraCondType}
             onConditioningTypeChange={setIcLoraCondType}
+            adapterType={icLoraAdapterType}
+            onAdapterTypeChange={setIcLoraAdapterType}
             conditioningStrength={icLoraStrength}
             onConditioningStrengthChange={setIcLoraStrength}
             outputVideoUrl={icLoraResult?.videoUrl || null}
@@ -1906,6 +1933,7 @@ export function GenSpace() {
 
         {/* Prompt bar */}
         <PromptBar
+          destinationFolder={currentProjectId || 'playground'}
           mode={mode}
           onModeChange={setMode}
           canUseIcLora={!forceApiGenerations}
@@ -1927,6 +1955,11 @@ export function GenSpace() {
           shouldVideoGenerateWithLtxApi={shouldVideoGenerateWithLtxApi}
           icLoraCondType={icLoraCondType}
           onIcLoraCondTypeChange={setIcLoraCondType}
+          icLoraAdapterType={icLoraAdapterType}
+          onIcLoraAdapterTypeChange={(adapterType) => {
+            setIcLoraAdapterType(adapterType)
+            setIcLoraCondType(adapterType === 'ingredients' ? 'reference_sheet' : 'canny')
+          }}
           icLoraStrength={icLoraStrength}
           onIcLoraStrengthChange={setIcLoraStrength}
           batchCount={batchCount}

@@ -15,8 +15,10 @@ export interface AppSettings {
   useTorchCompile: boolean
   loadOnStartup: boolean
   hasLtxApiKey: boolean
+  ltxApiBaseUrl: string
   userPrefersLtxApiVideoGenerations: boolean
   hasFalApiKey: boolean
+  falApiBaseUrl: string
   hasGeminiApiKey: boolean
   useLocalTextEncoder: boolean
   fastModel: FastModelSettings
@@ -40,8 +42,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   useTorchCompile: false,
   loadOnStartup: true,
   hasLtxApiKey: false,
+  ltxApiBaseUrl: 'https://api.ltx.video',
   userPrefersLtxApiVideoGenerations: false,
   hasFalApiKey: false,
+  falApiBaseUrl: 'https://fal.run',
   hasGeminiApiKey: false,
   useLocalTextEncoder: false,
   fastModel: { useUpscaler: true },
@@ -69,6 +73,8 @@ interface AppSettingsContextValue {
   refreshSettings: () => Promise<void>
   saveLtxApiKey: (value: string) => Promise<void>
   saveFalApiKey: (value: string) => Promise<void>
+  saveLtxApiConfig: (apiKey: string, baseUrl: string) => Promise<void>
+  saveFalApiConfig: (apiKey: string, baseUrl: string) => Promise<void>
   saveGeminiApiKey: (value: string) => Promise<void>
   savePromptEnhancerApiKey: (value: string) => Promise<void>
   forceApiGenerations: boolean
@@ -96,8 +102,10 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     useTorchCompile: data.useTorchCompile ?? DEFAULT_APP_SETTINGS.useTorchCompile,
     loadOnStartup: data.loadOnStartup ?? DEFAULT_APP_SETTINGS.loadOnStartup,
     hasLtxApiKey: data.hasLtxApiKey ?? DEFAULT_APP_SETTINGS.hasLtxApiKey,
+    ltxApiBaseUrl: data.ltxApiBaseUrl ?? DEFAULT_APP_SETTINGS.ltxApiBaseUrl,
     userPrefersLtxApiVideoGenerations: data.userPrefersLtxApiVideoGenerations ?? DEFAULT_APP_SETTINGS.userPrefersLtxApiVideoGenerations,
     hasFalApiKey: data.hasFalApiKey ?? DEFAULT_APP_SETTINGS.hasFalApiKey,
+    falApiBaseUrl: data.falApiBaseUrl ?? DEFAULT_APP_SETTINGS.falApiBaseUrl,
     hasGeminiApiKey: data.hasGeminiApiKey ?? DEFAULT_APP_SETTINGS.hasGeminiApiKey,
     useLocalTextEncoder: data.useLocalTextEncoder ?? DEFAULT_APP_SETTINGS.useLocalTextEncoder,
     fastModel: data.fastModel ?? DEFAULT_APP_SETTINGS.fastModel,
@@ -268,11 +276,11 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     setSettings((prev) => ({ ...prev, ...patch }))
   }, [])
 
-  const saveLtxApiKey = useCallback(async (value: string) => {
+  const saveLtxApiConfig = useCallback(async (apiKey: string, baseUrl: string) => {
     const response = await backendFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ltxApiKey: value }),
+      body: JSON.stringify({ ltxApiKey: apiKey, ltxApiBaseUrl: baseUrl }),
     })
     if (!response.ok) {
       const detail = await response.text()
@@ -280,6 +288,10 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     }
     await refreshSettings()
   }, [refreshSettings])
+
+  const saveLtxApiKey = useCallback(async (value: string) => {
+    await saveLtxApiConfig(value, settings.ltxApiBaseUrl)
+  }, [saveLtxApiConfig, settings.ltxApiBaseUrl])
 
   const saveGeminiApiKey = useCallback(async (value: string) => {
     const response = await backendFetch('/api/settings', {
@@ -294,11 +306,11 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     await refreshSettings()
   }, [refreshSettings])
 
-  const saveFalApiKey = useCallback(async (value: string) => {
+  const saveFalApiConfig = useCallback(async (apiKey: string, baseUrl: string) => {
     const response = await backendFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ falApiKey: value }),
+      body: JSON.stringify({ falApiKey: apiKey, falApiBaseUrl: baseUrl }),
     })
     if (!response.ok) {
       const detail = await response.text()
@@ -306,6 +318,10 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     }
     await refreshSettings()
   }, [refreshSettings])
+
+  const saveFalApiKey = useCallback(async (value: string) => {
+    await saveFalApiConfig(value, settings.falApiBaseUrl)
+  }, [saveFalApiConfig, settings.falApiBaseUrl])
 
   const savePromptEnhancerApiKey = useCallback(async (value: string) => {
     const response = await backendFetch('/api/settings', {
@@ -332,6 +348,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       refreshSettings,
       saveLtxApiKey,
       saveFalApiKey,
+      saveLtxApiConfig,
+      saveFalApiConfig,
       saveGeminiApiKey,
       savePromptEnhancerApiKey,
       forceApiGenerations,
@@ -339,7 +357,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       serverDataDir,
       shouldVideoGenerateWithLtxApi,
     }),
-    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiKey, saveGeminiApiKey, saveLtxApiKey, savePromptEnhancerApiKey, serverDataDir, settings, shouldVideoGenerateWithLtxApi, updateSettings],
+    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiConfig, saveFalApiKey, saveGeminiApiKey, saveLtxApiConfig, saveLtxApiKey, savePromptEnhancerApiKey, serverDataDir, settings, shouldVideoGenerateWithLtxApi, updateSettings],
   )
 
   return <AppSettingsContext.Provider value={contextValue}>{children}</AppSettingsContext.Provider>

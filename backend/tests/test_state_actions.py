@@ -268,6 +268,22 @@ def test_ic_lora_load_includes_depth_resources(test_state, fake_services):
     assert ic_state.depth_model_path == depth_path
 
 
+def test_ic_lora_load_includes_pose_resources(test_state, fake_services):
+    lora_path = str(_model_path(test_state, "ic_lora"))
+    detector_path = str(_model_path(test_state, "person_detector"))
+    pose_path = str(_model_path(test_state, "pose_processor"))
+
+    ic_state = test_state.pipelines.load_ic_lora(
+        lora_path,
+        person_detector_model_path=detector_path,
+        pose_model_path=pose_path,
+    )
+
+    assert ic_state.pose_pipeline is fake_services.pose_processor_pipeline
+    assert ic_state.person_detector_model_path == detector_path
+    assert ic_state.pose_model_path == pose_path
+
+
 def test_ic_lora_unload_clears_preprocessing_resources(test_state):
     lora_path = str(_model_path(test_state,"ic_lora"))
     depth_path = str(_model_path(test_state,"depth_processor"))

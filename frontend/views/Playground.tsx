@@ -20,7 +20,13 @@ import { fileUrlToPath } from '../lib/url-to-path'
 import { copyToAssetFolder } from '../lib/asset-copy'
 import { sanitizeForcedApiVideoSettings } from '../lib/api-video-options'
 import { RetakePanel } from '../components/RetakePanel'
-import { ICLoraPanel, CONDITIONING_TYPES, type ICLoraConditioningType } from '../components/ICLoraPanel'
+import {
+  ICLoraPanel,
+  CONDITIONING_TYPES,
+  IC_LORA_ADAPTERS,
+  type ICLoraAdapterType,
+  type ICLoraConditioningType,
+} from '../components/ICLoraPanel'
 import { Tooltip } from '../components/ui/tooltip'
 import { EnhanceIcon } from '../components/EnhanceIcon'
 import { usePromptEnhancer } from '../hooks/use-prompt-enhancer'
@@ -103,7 +109,7 @@ export function Playground() {
       return
     }
     if (!prompt.trim() || isEnhancingPrompt) return
-    const enhanced = await enhancePrompt(prompt, mode === 'text-to-image' ? 'image' : 'video')
+    const enhanced = await enhancePrompt(prompt, mode === 'text-to-image' ? 'image' : 'video', setPrompt)
     if (enhanced) setPrompt(enhanced)
   }
 
@@ -137,12 +143,15 @@ export function Playground() {
   const [icLoraInput, setIcLoraInput] = useState({
     videoUrl: null as string | null,
     videoPath: null as string | null,
-    conditioningType: 'canny' as 'canny' | 'depth',
+    adapterType: 'union' as ICLoraAdapterType,
+    conditioningType: 'canny' as ICLoraConditioningType,
     conditioningStrength: 1.0,
+    anchorImagePath: null as string | null,
     ready: false,
   })
   const [icLoraPanelKey, setIcLoraPanelKey] = useState(0)
   const [icLoraCondType, setIcLoraCondType] = useState<ICLoraConditioningType>('canny')
+  const [icLoraAdapterType, setIcLoraAdapterType] = useState<ICLoraAdapterType>('union')
   const [icLoraStrength, setIcLoraStrength] = useState(1.0)
 
   // Ref to store generated image URL for "Create video" flow
@@ -160,20 +169,30 @@ export function Playground() {
     inputAudioUrl?: string
   } | null>(null)
   const retakeSubmissionRef = useRef<{ prompt: string; startTime: number; duration: number } | null>(null)
-  const icLoraSubmissionRef = useRef<{ prompt: string; conditioningType: ICLoraConditioningType; conditioningStrength: number } | null>(null)
+  const icLoraSubmissionRef = useRef<{
+    prompt: string
+    adapterType: ICLoraAdapterType
+    conditioningType: ICLoraConditioningType
+    conditioningStrength: number
+    anchorImagePath: string | null
+  } | null>(null)
 
   const handleGenerate = () => {
     if (mode === 'ic-lora') {
       if (!icLoraInput.videoPath || !icLoraInput.ready || !prompt.trim()) return
       icLoraSubmissionRef.current = {
         prompt,
+        adapterType: icLoraAdapterType,
         conditioningType: icLoraCondType,
         conditioningStrength: icLoraStrength,
+        anchorImagePath: icLoraInput.anchorImagePath,
       }
       submitIcLora({
         videoPath: icLoraInput.videoPath,
+        adapterType: icLoraAdapterType,
         conditioningType: icLoraCondType,
         conditioningStrength: icLoraStrength,
+        anchorImagePath: icLoraInput.anchorImagePath,
         prompt,
       })
       return
@@ -253,12 +272,15 @@ export function Playground() {
     setIcLoraInput({
       videoUrl: null,
       videoPath: null,
+      adapterType: 'union',
       conditioningType: 'canny',
       conditioningStrength: 1.0,
+      anchorImagePath: null,
       ready: false,
     })
     setIcLoraPanelKey((prev) => prev + 1)
     setIcLoraCondType('canny')
+    setIcLoraAdapterType('union')
     setIcLoraStrength(1.0)
     resetRetake()
     resetIcLora()
@@ -386,6 +408,8 @@ export function Playground() {
             cameraMotion: 'none',
             icLoraConditioningType: submission?.conditioningType,
             icLoraConditioningStrength: submission?.conditioningStrength,
+            icLoraAdapterType: submission?.adapterType,
+            icLoraAnchorImagePath: submission?.anchorImagePath || undefined,
           },
           takes: [{ url: finalUrl, path: finalPath, createdAt: Date.now() }],
           activeTakeIndex: 0,
@@ -456,16 +480,19 @@ export function Playground() {
                 <ImageUploader
                   selectedImage={selectedImage}
                   onImageSelect={setSelectedImage}
+                  destinationFolder={PLAYGROUND_ASSET_FOLDER}
                 />
                 <AudioUploader
                   selectedAudio={selectedAudio}
                   onAudioSelect={setSelectedAudio}
+                  destinationFolder={PLAYGROUND_ASSET_FOLDER}
                 />
               </>
             )}
 
             {isRetakeMode && (
               <RetakePanel
+                destinationFolder={PLAYGROUND_ASSET_FOLDER}
                 resetKey={retakePanelKey}
                 isProcessing={isRetaking}
                 processingStatus={retakeStatus}
@@ -476,11 +503,14 @@ export function Playground() {
             {isIcLoraMode && (
               <>
                 <ICLoraPanel
+                  destinationFolder={PLAYGROUND_ASSET_FOLDER}
                   resetKey={icLoraPanelKey}
                   isProcessing={isIcLoraGenerating}
                   processingStatus={icLoraStatus}
                   conditioningType={icLoraCondType}
                   onConditioningTypeChange={setIcLoraCondType}
+                  adapterType={icLoraAdapterType}
+                  onAdapterTypeChange={setIcLoraAdapterType}
                   conditioningStrength={icLoraStrength}
                   onConditioningStrengthChange={setIcLoraStrength}
                   outputVideoUrl={icLoraResult?.videoUrl || null}
@@ -490,6 +520,23 @@ export function Playground() {
 
                 {/* Conditioning controls */}
                 <div className="space-y-3 p-4 bg-zinc-900 border border-zinc-800 rounded-2xl">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-zinc-400">Character Method</label>
+                    <select
+                      value={icLoraAdapterType}
+                      onChange={(e) => {
+                        const adapterType = e.target.value as ICLoraAdapterType
+                        setIcLoraAdapterType(adapterType)
+                        setIcLoraCondType(adapterType === 'ingredients' ? 'reference_sheet' : 'canny')
+                      }}
+                      className="bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
+                    >
+                      {IC_LORA_ADAPTERS.map(adapter => (
+                        <option key={adapter.value} value={adapter.value}>{adapter.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {icLoraAdapterType === 'union' && (
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-medium text-zinc-400">Conditioning Type</label>
                     <select
@@ -502,6 +549,7 @@ export function Playground() {
                       ))}
                     </select>
                   </div>
+                  )}
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-medium text-zinc-400">Strength</label>
