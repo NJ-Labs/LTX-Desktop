@@ -481,7 +481,13 @@ export function useGapGeneration({
         try {
           const errData = await response.json()
           const errStr = JSON.stringify(errData).toLowerCase()
-          if (errStr.includes('api_key') || errStr.includes('gemini') || errStr.includes('no api key') || errStr.includes('api key')) {
+          if (
+            errStr.includes('prompt_enhancer')
+            || errStr.includes('not configured')
+            || errStr.includes('authorization')
+            || errStr.includes('api_key')
+            || errStr.includes('api key')
+          ) {
             isApiKeyError = true
           }
         } catch {}

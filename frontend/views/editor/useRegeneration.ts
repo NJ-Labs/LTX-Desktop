@@ -190,7 +190,7 @@ export function useRegeneration(params: UseRegenerationParams) {
       setClips(prev => prev.map(c => c.id === clipId ? { ...c, isRegenerating: true } : c))
     }
 
-    // If the asset has no generationParams (imported asset), auto-generate a prompt from the first frame via Gemini
+    // If the asset has no generationParams (imported asset), auto-generate a prompt from the first frame via the prompt enhancer endpoint.
     let params = asset.generationParams
     if (!params) {
       try {
@@ -204,7 +204,7 @@ export function useRegeneration(params: UseRegenerationParams) {
         }
 
         if (framePath) {
-          // Ask Gemini to describe the frame
+          // Ask the prompt enhancer endpoint to describe the frame
           const resp = await backendFetch('/api/suggest-gap-prompt', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

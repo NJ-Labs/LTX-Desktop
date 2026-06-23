@@ -19,7 +19,6 @@ export interface AppSettings {
   userPrefersLtxApiVideoGenerations: boolean
   hasFalApiKey: boolean
   falApiBaseUrl: string
-  hasGeminiApiKey: boolean
   useLocalTextEncoder: boolean
   fastModel: FastModelSettings
   proModel: InferenceSettings
@@ -46,7 +45,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   userPrefersLtxApiVideoGenerations: false,
   hasFalApiKey: false,
   falApiBaseUrl: 'https://fal.run',
-  hasGeminiApiKey: false,
   useLocalTextEncoder: false,
   fastModel: { useUpscaler: true },
   proModel: { steps: 20, useUpscaler: true },
@@ -75,7 +73,6 @@ interface AppSettingsContextValue {
   saveFalApiKey: (value: string) => Promise<void>
   saveLtxApiConfig: (apiKey: string, baseUrl: string) => Promise<void>
   saveFalApiConfig: (apiKey: string, baseUrl: string) => Promise<void>
-  saveGeminiApiKey: (value: string) => Promise<void>
   savePromptEnhancerApiKey: (value: string) => Promise<void>
   forceApiGenerations: boolean
   offlineMode: boolean
@@ -106,7 +103,6 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     userPrefersLtxApiVideoGenerations: data.userPrefersLtxApiVideoGenerations ?? DEFAULT_APP_SETTINGS.userPrefersLtxApiVideoGenerations,
     hasFalApiKey: data.hasFalApiKey ?? DEFAULT_APP_SETTINGS.hasFalApiKey,
     falApiBaseUrl: data.falApiBaseUrl ?? DEFAULT_APP_SETTINGS.falApiBaseUrl,
-    hasGeminiApiKey: data.hasGeminiApiKey ?? DEFAULT_APP_SETTINGS.hasGeminiApiKey,
     useLocalTextEncoder: data.useLocalTextEncoder ?? DEFAULT_APP_SETTINGS.useLocalTextEncoder,
     fastModel: data.fastModel ?? DEFAULT_APP_SETTINGS.fastModel,
     proModel: data.proModel ?? DEFAULT_APP_SETTINGS.proModel,
@@ -255,7 +251,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     if (!isLoaded || backendProcessStatus !== 'alive') return
     const syncTimer = setTimeout(async () => {
       try {
-        const { hasLtxApiKey: _a, hasFalApiKey: _b, hasGeminiApiKey: _c, modelsDir: _d, hasPromptEnhancerApiKey: _e, ...syncPayload } = settings
+        const { hasLtxApiKey: _a, hasFalApiKey: _b, modelsDir: _c, hasPromptEnhancerApiKey: _d, ...syncPayload } = settings
         await backendFetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -292,19 +288,6 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const saveLtxApiKey = useCallback(async (value: string) => {
     await saveLtxApiConfig(value, settings.ltxApiBaseUrl)
   }, [saveLtxApiConfig, settings.ltxApiBaseUrl])
-
-  const saveGeminiApiKey = useCallback(async (value: string) => {
-    const response = await backendFetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ geminiApiKey: value }),
-    })
-    if (!response.ok) {
-      const detail = await response.text()
-      throw new Error(detail || 'Failed to save Gemini API key.')
-    }
-    await refreshSettings()
-  }, [refreshSettings])
 
   const saveFalApiConfig = useCallback(async (apiKey: string, baseUrl: string) => {
     const response = await backendFetch('/api/settings', {
@@ -350,14 +333,13 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       saveFalApiKey,
       saveLtxApiConfig,
       saveFalApiConfig,
-      saveGeminiApiKey,
       savePromptEnhancerApiKey,
       forceApiGenerations,
       offlineMode,
       serverDataDir,
       shouldVideoGenerateWithLtxApi,
     }),
-    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiConfig, saveFalApiKey, saveGeminiApiKey, saveLtxApiConfig, saveLtxApiKey, savePromptEnhancerApiKey, serverDataDir, settings, shouldVideoGenerateWithLtxApi, updateSettings],
+    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiConfig, saveFalApiKey, saveLtxApiConfig, saveLtxApiKey, savePromptEnhancerApiKey, serverDataDir, settings, shouldVideoGenerateWithLtxApi, updateSettings],
   )
 
   return <AppSettingsContext.Provider value={contextValue}>{children}</AppSettingsContext.Provider>

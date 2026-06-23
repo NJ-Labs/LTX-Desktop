@@ -1,4 +1,4 @@
-"""Gap prompt suggestion handler (Gemini-powered)."""
+"""Gap prompt suggestion handler using the prompt enhancer's OpenAI-compatible endpoint."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from api_types import (
 )
 from _routes._errors import HTTPError
 from handlers.base import StateHandlerBase
-from pydantic import BaseModel, Field, ValidationError
+from handlers.prompt_enhancer_handler import _chat_completions_url, _extract_openai_text
 from server_utils.media_validation import normalize_optional_path, validate_image_file
 from services.interfaces import HTTPClient, HttpTimeoutError, JSONValue
 from state.app_state_types import AppState
@@ -22,30 +22,6 @@ if TYPE_CHECKING:
     from runtime_config.runtime_config import RuntimeConfig
 
 logger = logging.getLogger(__name__)
-
-
-class _GeminiPart(BaseModel):
-    text: str
-
-
-class _GeminiContent(BaseModel):
-    parts: list[_GeminiPart] = Field(min_length=1)
-
-
-class _GeminiCandidate(BaseModel):
-    content: _GeminiContent
-
-
-class _GeminiResponsePayload(BaseModel):
-    candidates: list[_GeminiCandidate] = Field(min_length=1)
-
-
-def _extract_gemini_text(payload: object) -> str:
-    try:
-        parsed = _GeminiResponsePayload.model_validate(payload)
-    except ValidationError:
-        raise HTTPError(500, "GEMINI_PARSE_ERROR")
-    return parsed.candidates[0].content.parts[0].text
 
 
 def _read_image_file_as_base64(file_path: str | None) -> str | None:
@@ -70,6 +46,13 @@ class SuggestGapPromptHandler(StateHandlerBase):
         super().__init__(state, lock, config)
         self._http = http
 
+    @staticmethod
+    def _image_part(encoded_image: str) -> JSONValue:
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"},
+        }
+
     def suggest_gap(self, req: SuggestGapPromptRequest) -> SuggestGapPromptResponse:
         if self.config.offline_mode:
             raise HTTPError(503, "GAP_PROMPT_SUGGESTION_UNAVAILABLE_OFFLINE")
@@ -85,9 +68,13 @@ class SuggestGapPromptHandler(StateHandlerBase):
         if not before_frame and not after_frame and not before_prompt and not after_prompt:
             raise HTTPError(400, "At least one neighboring frame or prompt is required")
 
-        gemini_api_key = self.state.app_settings.gemini_api_key
-        if not gemini_api_key:
-            raise HTTPError(400, "GEMINI_API_KEY_MISSING")
+        settings = self.state.app_settings
+        base_url = settings.prompt_enhancer_base_url.strip()
+        api_key = settings.prompt_enhancer_api_key.strip()
+        model = settings.prompt_enhancer_model.strip()
+
+        if not base_url:
+            raise HTTPError(400, "PROMPT_ENHANCER_NOT_CONFIGURED")
 
         is_image_gen = mode in ("text-to-image", "t2i")
         is_image_to_video = mode in ("image-to-video", "i2v")
@@ -130,43 +117,50 @@ class SuggestGapPromptHandler(StateHandlerBase):
             context_text += "A reference image is provided to guide the start of the shot.\n"
         context_text += "\nPlease suggest a detailed prompt for generating " + ("an image" if is_image_gen else "a video clip") + " to fill this gap."
 
-        user_parts: list[JSONValue] = [{"text": context_text}]
+        user_parts: list[JSONValue] = [{"type": "text", "text": context_text}]
 
         if input_image:
-            user_parts.append({"text": "Reference image for the start of the generated shot:"})
-            user_parts.append({"inlineData": {"mimeType": "image/jpeg", "data": input_image}})
+            user_parts.append({"type": "text", "text": "Reference image for the start of the generated shot:"})
+            user_parts.append(self._image_part(input_image))
         if before_frame:
-            user_parts.append({"text": "Last frame of the shot BEFORE the gap:"})
-            user_parts.append({"inlineData": {"mimeType": "image/jpeg", "data": before_frame}})
+            user_parts.append({"type": "text", "text": "Last frame of the shot BEFORE the gap:"})
+            user_parts.append(self._image_part(before_frame))
         if after_frame:
-            user_parts.append({"text": "First frame of the shot AFTER the gap:"})
-            user_parts.append({"inlineData": {"mimeType": "image/jpeg", "data": after_frame}})
+            user_parts.append({"type": "text", "text": "First frame of the shot AFTER the gap:"})
+            user_parts.append(self._image_part(after_frame))
 
-        gemini_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-        contents: list[JSONValue] = [{"role": "user", "parts": user_parts}]
-        system_instruction: dict[str, JSONValue] = {"parts": [{"text": system_text}]}
-        generation_config: dict[str, JSONValue] = {"temperature": 0.7, "maxOutputTokens": 512}
-        gemini_payload: dict[str, JSONValue] = {
-            "contents": contents,
-            "systemInstruction": system_instruction,
-            "generationConfig": generation_config,
+        payload: dict[str, JSONValue] = {
+            "model": model or "local-model",
+            "messages": [
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": user_parts},
+            ],
+            "temperature": 0.7,
+            "max_tokens": 512,
+            "stream": False,
         }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         try:
             response = self._http.post(
-                gemini_url,
-                headers={"Content-Type": "application/json", "x-goog-api-key": gemini_api_key},
-                json_payload=gemini_payload,
+                _chat_completions_url(base_url),
+                headers=headers,
+                json_payload=payload,
                 timeout=30,
             )
         except HttpTimeoutError as exc:
-            raise HTTPError(504, "Gemini API request timed out") from exc
+            raise HTTPError(504, "PROMPT_ENHANCER_TIMEOUT") from exc
         except Exception as exc:
-            raise HTTPError(500, str(exc)) from exc
+            raise HTTPError(502, f"PROMPT_ENHANCER_REQUEST_FAILED: {exc}") from exc
 
         if response.status_code != 200:
-            logger.error("Gemini gap suggestion error: %s - %s", response.status_code, response.text)
-            raise HTTPError(response.status_code, f"Gemini API error: {response.text}")
+            logger.error("Prompt enhancer gap suggestion error: %s - %s", response.status_code, response.text)
+            status = response.status_code if 400 <= response.status_code < 600 else 502
+            raise HTTPError(status, f"Prompt enhancer error: {response.text}")
 
-        suggested_prompt = _extract_gemini_text(response.json()).strip()
+        suggested_prompt = _extract_openai_text(response.json()).strip()
+        if not suggested_prompt:
+            raise HTTPError(502, "PROMPT_ENHANCER_EMPTY_RESPONSE")
         return SuggestGapPromptResponse(status="success", suggested_prompt=suggested_prompt)

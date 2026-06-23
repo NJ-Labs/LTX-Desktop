@@ -17,6 +17,10 @@ This repository now includes a backend runtime image for self-hosted, offline de
 docker build -f Dockerfile.airgap -t ltx-desktop-airgap .
 ```
 
+The repository enforces LF line endings for Linux shell scripts and Dockerfiles,
+so images built from Windows checkouts can still run correctly in Linux pods.
+After pulling line-ending policy changes, rebuild the image before redeploying.
+
 ## Run
 
 Mount a single host directory that already contains all required model files and folders using the names defined in [backend/runtime_config/model_download_specs.py](../backend/runtime_config/model_download_specs.py).

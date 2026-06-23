@@ -87,7 +87,6 @@ class AppSettings(SettingsBaseModel):
     prompt_cache_size: int = 100
     prompt_enhancer_enabled_t2v: bool = True
     prompt_enhancer_enabled_i2v: bool = False
-    gemini_api_key: str = ""
     prompt_enhancer_base_url: str = ""
     prompt_enhancer_api_key: str = ""
     prompt_enhancer_model: str = ""
@@ -189,7 +188,6 @@ class SettingsResponse(SettingsBaseModel):
     prompt_cache_size: int = 100
     prompt_enhancer_enabled_t2v: bool = True
     prompt_enhancer_enabled_i2v: bool = False
-    has_gemini_api_key: bool = False
     prompt_enhancer_base_url: str = ""
     prompt_enhancer_model: str = ""
     has_prompt_enhancer_api_key: bool = False
@@ -204,11 +202,9 @@ def to_settings_response(settings: AppSettings) -> SettingsResponse:
     data = settings.model_dump(by_alias=False)
     ltx_key = data.pop("ltx_api_key", "")
     fal_key = data.pop("fal_api_key", "")
-    gemini_key = data.pop("gemini_api_key", "")
     prompt_enhancer_key = data.pop("prompt_enhancer_api_key", "")
     data["has_ltx_api_key"] = bool(ltx_key)
     data["has_fal_api_key"] = bool(fal_key)
-    data["has_gemini_api_key"] = bool(gemini_key)
     data["has_prompt_enhancer_api_key"] = bool(prompt_enhancer_key)
     # models_dir and prompt_enhancer_base_url/model pass through as-is (not secret)
     return SettingsResponse.model_validate(data)

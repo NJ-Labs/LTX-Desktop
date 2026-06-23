@@ -31,13 +31,14 @@ class TestGetSettings:
         assert data["promptCacheSize"] == 100
         assert data["promptEnhancerEnabledT2V"] is True
         assert data["promptEnhancerEnabledI2V"] is False
-        assert data["hasGeminiApiKey"] is False
         assert data["seedLocked"] is False
         assert data["lockedSeed"] == 42
         assert data["modelsDir"] == ""
         assert "ltxApiKey" not in data
         assert "falApiKey" not in data
-        assert "geminiApiKey" not in data
+        assert data["promptEnhancerBaseUrl"] == ""
+        assert data["promptEnhancerModel"] == ""
+        assert data["hasPromptEnhancerApiKey"] is False
 
     def test_reflects_changed_settings(self, client, test_state):
         test_state.state.app_settings.use_torch_compile = True
@@ -113,17 +114,21 @@ class TestPostSettings:
             json={
                 "ltxApiKey": "ltx-key-abc",
                 "ltxApiBaseUrl": "https://openai.example/v1",
-                "geminiApiKey": "gemini-key-xyz",
                 "falApiKey": "fal-key-123",
                 "falApiBaseUrl": "https://fal-proxy.example",
+                "promptEnhancerApiKey": "pe-key-xyz",
+                "promptEnhancerBaseUrl": "http://localhost:1234/v1",
+                "promptEnhancerModel": "qwen-vl",
             },
         )
         assert r.status_code == 200
         assert test_state.state.app_settings.ltx_api_key == "ltx-key-abc"
         assert test_state.state.app_settings.ltx_api_base_url == "https://openai.example/v1"
-        assert test_state.state.app_settings.gemini_api_key == "gemini-key-xyz"
         assert test_state.state.app_settings.fal_api_key == "fal-key-123"
         assert test_state.state.app_settings.fal_api_base_url == "https://fal-proxy.example"
+        assert test_state.state.app_settings.prompt_enhancer_api_key == "pe-key-xyz"
+        assert test_state.state.app_settings.prompt_enhancer_base_url == "http://localhost:1234/v1"
+        assert test_state.state.app_settings.prompt_enhancer_model == "qwen-vl"
 
     def test_blank_base_urls_reset_to_defaults(self, client, test_state):
         r = client.post(

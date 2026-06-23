@@ -7,6 +7,7 @@ import { backendFetch } from '../lib/backend'
 import { logger } from '../lib/logger'
 import { fileUrlToPath } from '../lib/url-to-path'
 import { importMediaFile, importMediaPath } from '../lib/media-import'
+import { isWebMode } from '../lib/web-mode'
 
 export type ICLoraAdapterType = 'union' | 'ingredients'
 export type ICLoraConditioningType = 'canny' | 'depth' | 'pose' | 'reference_sheet'
@@ -121,6 +122,8 @@ export function ICLoraPanel({
   onChange,
 }: ICLoraPanelProps) {
   const inputVideoRef = useRef<HTMLVideoElement>(null)
+  const inputFileRef = useRef<HTMLInputElement>(null)
+  const anchorFileRef = useRef<HTMLInputElement>(null)
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(initialVideoUrl || null)
   const [inputVideoPath, setInputVideoPath] = useState<string | null>(initialVideoPath || null)
   const [inputTime, setInputTime] = useState(0)
@@ -351,7 +354,46 @@ export function ICLoraPanel({
     }
   }, [inputVideoUrl, icLoraReady, isCheckingIcLora])
 
+  const importInputFile = useCallback(async (file: File) => {
+    const expectedKind = adapterType === 'ingredients' ? 'image/' : 'video/'
+    if (!file.type.startsWith(expectedKind)) return
+    const imported = await importMediaFile(file, destinationFolder)
+    if (!imported) return
+    setInputVideoPath(imported.path)
+    setInputVideoUrl(imported.url)
+    setConditioningPreview(null)
+    setExtractError(null)
+  }, [adapterType, destinationFolder])
+
+  const importInputPath = useCallback(async (sourcePath: string) => {
+    const imported = await importMediaPath(sourcePath, destinationFolder)
+    if (!imported) return
+    setInputVideoPath(imported.path)
+    setInputVideoUrl(imported.url)
+    setConditioningPreview(null)
+    setExtractError(null)
+  }, [destinationFolder])
+
+  const importAnchorFile = useCallback(async (file: File) => {
+    if (!file.type.startsWith('image/')) return
+    const imported = await importMediaFile(file, destinationFolder)
+    if (!imported) return
+    setAnchorImagePath(imported.path)
+    setAnchorImageUrl(imported.url)
+  }, [destinationFolder])
+
+  const importAnchorPath = useCallback(async (sourcePath: string) => {
+    const imported = await importMediaPath(sourcePath, destinationFolder)
+    if (!imported) return
+    setAnchorImagePath(imported.path)
+    setAnchorImageUrl(imported.url)
+  }, [destinationFolder])
+
   const handleBrowse = useCallback(async () => {
+    if (isWebMode() || !window.electronAPI?.showOpenFileDialog) {
+      inputFileRef.current?.click()
+      return
+    }
     const paths = await window.electronAPI.showOpenFileDialog({
       title: adapterType === 'ingredients' ? 'Select Character Reference Sheet' : 'Select Driving Video',
       filters: adapterType === 'ingredients'
@@ -359,26 +401,34 @@ export function ICLoraPanel({
         : [{ name: 'Video', extensions: ['mp4', 'mov', 'avi', 'webm', 'mkv'] }],
     })
     if (paths && paths.length > 0) {
-      const imported = await importMediaPath(paths[0], destinationFolder)
-      if (!imported) return
-      setInputVideoPath(imported.path)
-      setInputVideoUrl(imported.url)
-      setConditioningPreview(null)
-      setExtractError(null)
+      await importInputPath(paths[0])
     }
-  }, [adapterType, destinationFolder])
+  }, [adapterType, importInputPath])
 
   const handleBrowseAnchor = useCallback(async () => {
+    if (isWebMode() || !window.electronAPI?.showOpenFileDialog) {
+      anchorFileRef.current?.click()
+      return
+    }
     const paths = await window.electronAPI.showOpenFileDialog({
       title: 'Select Character Identity Anchor',
       filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
     })
     if (!paths || paths.length === 0) return
-    const imported = await importMediaPath(paths[0], destinationFolder)
-    if (!imported) return
-    setAnchorImagePath(imported.path)
-    setAnchorImageUrl(imported.url)
-  }, [destinationFolder])
+    await importAnchorPath(paths[0])
+  }, [importAnchorPath])
+
+  const handleInputFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (file) await importInputFile(file)
+  }, [importInputFile])
+
+  const handleAnchorFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (file) await importAnchorFile(file)
+  }, [importAnchorFile])
 
   const handleClear = useCallback(() => {
     setInputVideoPath(null)
@@ -412,15 +462,9 @@ export function ICLoraPanel({
 
     const file = e.dataTransfer.files?.[0]
     if (file) {
-      const imported = await importMediaFile(file, destinationFolder)
-      if (imported) {
-        setInputVideoPath(imported.path)
-        setInputVideoUrl(imported.url)
-        setConditioningPreview(null)
-        setExtractError(null)
-      }
+      await importInputFile(file)
     }
-  }, [adapterType, destinationFolder])
+  }, [adapterType, importInputFile])
 
   const showDownloadGate = isCheckingIcLora || !icLoraReady
   const gateItems = requiredModelIds.map(modelId => {
@@ -434,6 +478,20 @@ export function ICLoraPanel({
 
   return (
     <div className={`bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden flex flex-col ${fillHeight ? 'h-full min-h-0' : ''}`}>
+      <input
+        ref={inputFileRef}
+        type="file"
+        accept={adapterType === 'ingredients' ? 'image/png,image/jpeg,image/webp' : 'video/mp4,video/quicktime,video/x-msvideo,video/webm,video/x-matroska'}
+        className="hidden"
+        onChange={handleInputFileSelect}
+      />
+      <input
+        ref={anchorFileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="hidden"
+        onChange={handleAnchorFileSelect}
+      />
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 flex-shrink-0">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-amber-400" />

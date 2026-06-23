@@ -62,7 +62,8 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
 
 COPY scripts/airgap-entrypoint.sh /usr/local/bin/airgap-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/airgap-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/airgap-entrypoint.sh \
+    && chmod +x /usr/local/bin/airgap-entrypoint.sh
 
 EXPOSE 8000
 

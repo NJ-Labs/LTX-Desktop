@@ -9,25 +9,31 @@ from services.ltx_api_client.ltx_api_client import LTXAPIClientError, LTXRetakeR
 from tests.fakes import FakeResponse
 
 
-def _gemini_ok(text: str = "Enhanced prompt text") -> FakeResponse:
+def _chat_ok(text: str = "Enhanced prompt text") -> FakeResponse:
     return FakeResponse(
         status_code=200,
-        json_payload={"candidates": [{"content": {"parts": [{"text": text}]}}]},
+        json_payload={"choices": [{"message": {"role": "assistant", "content": text}}]},
     )
 
 
-def _gemini_error(status: int = 429, body: str = "rate limited") -> FakeResponse:
+def _chat_error(status: int = 429, body: str = "rate limited") -> FakeResponse:
     return FakeResponse(status_code=status, text=body)
 
 
-def _gemini_empty_candidates() -> FakeResponse:
-    return FakeResponse(status_code=200, json_payload={"candidates": []})
+def _chat_empty_response() -> FakeResponse:
+    return FakeResponse(status_code=200, json_payload={"choices": [{"message": {"role": "assistant", "content": ""}}]})
+
+
+def _configure_prompt_enhancer(test_state) -> None:
+    test_state.state.app_settings.prompt_enhancer_base_url = "http://localhost:1234/v1"
+    test_state.state.app_settings.prompt_enhancer_api_key = "key"
+    test_state.state.app_settings.prompt_enhancer_model = "vision-model"
 
 
 class TestSuggestGapPrompt:
     def test_happy_path_with_prompts(self, client, test_state):
-        test_state.state.app_settings.gemini_api_key = "key"
-        test_state.http.queue("post", _gemini_ok("A smooth transition scene"))
+        _configure_prompt_enhancer(test_state)
+        test_state.http.queue("post", _chat_ok("A smooth transition scene"))
 
         r = client.post(
             "/api/suggest-gap-prompt",
@@ -37,10 +43,16 @@ class TestSuggestGapPrompt:
         data = r.json()
         assert data["status"] == "success"
         assert data["suggested_prompt"] == "A smooth transition scene"
+        call = test_state.http.calls[-1]
+        assert call.url == "http://localhost:1234/v1/chat/completions"
+        assert call.headers is not None
+        assert call.headers.get("Authorization") == "Bearer key"
+        assert call.json_payload is not None
+        assert call.json_payload["model"] == "vision-model"
 
     def test_happy_path_with_frames(self, client, test_state, make_test_image, tmp_path):
-        test_state.state.app_settings.gemini_api_key = "key"
-        test_state.http.queue("post", _gemini_ok("Transition clip"))
+        _configure_prompt_enhancer(test_state)
+        test_state.http.queue("post", _chat_ok("Transition clip"))
 
         before_path = tmp_path / "before.png"
         after_path = tmp_path / "after.png"
@@ -53,26 +65,33 @@ class TestSuggestGapPrompt:
         )
         assert r.status_code == 200
 
-        user_parts = test_state.http.calls[-1].json_payload["contents"][0]["parts"]
-        inline_parts = [part for part in user_parts if "inlineData" in part]
+        user_parts = test_state.http.calls[-1].json_payload["messages"][1]["content"]
+        inline_parts = [part for part in user_parts if part.get("type") == "image_url"]
         assert len(inline_parts) == 2
 
     def test_no_context_400(self, client, test_state):
-        test_state.state.app_settings.gemini_api_key = "key"
+        _configure_prompt_enhancer(test_state)
         r = client.post("/api/suggest-gap-prompt", json={})
         assert r.status_code == 400
 
-    def test_missing_gemini_key_400(self, client):
+    def test_missing_prompt_enhancer_config_400(self, client):
         r = client.post("/api/suggest-gap-prompt", json={"beforePrompt": "test"})
         assert r.status_code == 400
-        assert r.json()["error"] == "GEMINI_API_KEY_MISSING"
+        assert r.json()["error"] == "PROMPT_ENHANCER_NOT_CONFIGURED"
 
     def test_timeout_504(self, client, test_state):
-        test_state.state.app_settings.gemini_api_key = "key"
+        _configure_prompt_enhancer(test_state)
         test_state.http.queue("post", HttpTimeoutError("timeout"))
 
         r = client.post("/api/suggest-gap-prompt", json={"beforePrompt": "test"})
         assert r.status_code == 504
+
+    def test_empty_response_502(self, client, test_state):
+        _configure_prompt_enhancer(test_state)
+        test_state.http.queue("post", _chat_empty_response())
+
+        r = client.post("/api/suggest-gap-prompt", json={"beforePrompt": "test"})
+        assert r.status_code == 502
 
 
 class TestRetake:

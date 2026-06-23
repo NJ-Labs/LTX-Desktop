@@ -380,11 +380,11 @@ export function GapGenerationModal({
                 {gapSuggestionNoApiKey && (
                   <div className="mt-1.5 space-y-1.5">
                     <p className="text-[10px] text-zinc-500">
-                      Gemini API key required for AI prompt suggestions.
+                      Configure the Prompt Enhancer endpoint to enable AI prompt suggestions.
                     </p>
                     <button
                       onClick={() => {
-                        window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'apiKeys' } }))
+                        window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'promptEnhancer' } }))
                       }}
                       className="px-2.5 py-1 bg-blue-600 text-white text-[10px] rounded hover:bg-blue-500 transition-colors"
                     >

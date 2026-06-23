@@ -23,7 +23,7 @@ interface SettingsModalProps {
 type TabId = 'general' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const { settings, updateSettings, saveLtxApiConfig, saveFalApiConfig, saveGeminiApiKey, savePromptEnhancerApiKey, forceApiGenerations, offlineMode, serverDataDir } = useAppSettings()
+  const { settings, updateSettings, saveLtxApiConfig, saveFalApiConfig, savePromptEnhancerApiKey, forceApiGenerations, offlineMode, serverDataDir } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [ltxApiKeyInput, setLtxApiKeyInput] = useState('')
@@ -31,8 +31,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const [focusLtxApiKeyInputOnTabChange, setFocusLtxApiKeyInputOnTabChange] = useState(false)
   const [falApiKeyInput, setFalApiKeyInput] = useState('')
   const falApiKeyInputRef = useRef<HTMLInputElement>(null)
-  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('')
-  const geminiApiKeyInputRef = useRef<HTMLInputElement>(null)
   const [promptEnhancerApiKeyInput, setPromptEnhancerApiKeyInput] = useState('')
   const [promptEnhancerKeySaving, setPromptEnhancerKeySaving] = useState(false)
   const [promptEnhancerTesting, setPromptEnhancerTesting] = useState(false)
@@ -985,73 +983,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 </div>
               </div>
 
-              {/* Gemini API Key Section */}
-              <div className="space-y-4 pt-4 border-t border-zinc-800">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-purple-400" />
-                  <h3 className="text-sm font-semibold text-white">Gemini API</h3>
-                </div>
-
-                <p className="text-xs text-zinc-500 leading-relaxed">
-                  Your Gemini API key is used for AI-powered prompt suggestions when filling timeline gaps.
-                </p>
-
-                <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
-                  <div className="flex gap-2">
-                    <input
-                      ref={geminiApiKeyInputRef}
-                      type="password"
-                      value={geminiApiKeyInput}
-                      onChange={(e) => setGeminiApiKeyInput(e.target.value)}
-                      placeholder={settings.hasGeminiApiKey ? 'Enter new key to replace...' : 'Enter your Gemini API key...'}
-                      onKeyDown={(e) => e.stopPropagation()}
-                      className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                    <button
-                      onClick={() => {
-                        const trimmed = geminiApiKeyInput.trim()
-                        if (!trimmed) return
-                        void saveGeminiApiKey(trimmed)
-                        setGeminiApiKeyInput('')
-                      }}
-                      disabled={!geminiApiKeyInput.trim()}
-                      className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
-                    >
-                      Save Key
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className={`text-xs px-2 py-1 rounded inline-flex items-center gap-1.5 ${
-                      settings.hasGeminiApiKey
-                        ? 'bg-green-500/10 text-green-400'
-                        : 'bg-amber-500/10 text-amber-400'
-                    }`}>
-                      {settings.hasGeminiApiKey ? (
-                        <>
-                          <Check className="h-3 w-3" />
-                          Key configured
-                        </>
-                      ) : (
-                        <>
-                          <AlertCircle className="h-3 w-3" />
-                          API key required
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs">
-                    <a
-                      href="https://aistudio.google.com/app/apikey"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 transition-colors underline underline-offset-2"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      Get Gemini API key →
-                    </a>
-                  </div>
-                </div>
-              </div>
             </>
           )}
 
@@ -1239,8 +1170,9 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 <p className="text-xs text-zinc-500 leading-relaxed">
                   Enhances your prompts using your own OpenAI-compatible LLM endpoint (e.g. LM Studio, Ollama,
                   vLLM, or any hosted OpenAI-compatible API). Requests go from the backend to the URL you set
-                  below, so this works fully offline / air-gapped. Configure the endpoint, then enable enhancement
-                  per generation type.
+                  below, so this works fully offline / air-gapped. The same endpoint is also used for timeline
+                  gap prompt suggestions and imported-asset prompt recovery. Configure the endpoint, then enable
+                  enhancement per generation type.
                 </p>
 
                 {/* Base URL */}
