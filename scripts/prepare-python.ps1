@@ -21,6 +21,8 @@ Write-Host "========================================" -ForegroundColor Cyan
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 $BackendDir = Join-Path $ProjectDir "backend"
+$ComfyUIDir = Join-Path $ProjectDir "ComfyUI"
+$LTXVideoDir = Join-Path $ProjectDir "ComfyUI-LTXVideo"
 $OutputPath = Join-Path $ProjectDir $OutputDir
 $TempDir = Join-Path $env:TEMP "ltx-python-build"
 
@@ -66,6 +68,20 @@ $RequirementsFile = Join-Path $BackendDir "requirements-dist.txt"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: uv export failed!" -ForegroundColor Red
     exit 1
+}
+
+$ComfyUIRequirements = Join-Path $ComfyUIDir "requirements.txt"
+if (Test-Path $ComfyUIRequirements) {
+    Add-Content -Path $RequirementsFile -Value ""
+    Add-Content -Path $RequirementsFile -Value "# ComfyUI embedded runtime"
+    Get-Content $ComfyUIRequirements | Add-Content -Path $RequirementsFile
+}
+
+$LTXVideoRequirements = Join-Path $LTXVideoDir "requirements.txt"
+if (Test-Path $LTXVideoRequirements) {
+    Add-Content -Path $RequirementsFile -Value ""
+    Add-Content -Path $RequirementsFile -Value "# ComfyUI-LTXVideo custom nodes"
+    Get-Content $LTXVideoRequirements | Add-Content -Path $RequirementsFile
 }
 
 $DepCount = (Get-Content $RequirementsFile | Where-Object { $_ -match "^\S" }).Count

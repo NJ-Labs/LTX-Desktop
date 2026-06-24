@@ -199,6 +199,7 @@ from runtime_config.model_download_specs import DEFAULT_MODEL_DOWNLOAD_SPECS, DE
 from runtime_config.runtime_policy import decide_force_api_generations
 from state.app_state_types import ModelFileType
 from server_utils.model_layout_migration import migrate_legacy_models_layout
+from services.comfyui_service import ComfyUIService
 from services.gpu_info.gpu_info_impl import GpuInfoImpl
 
 migrate_legacy_models_layout(APP_DATA_DIR)
@@ -275,6 +276,12 @@ runtime_config = RuntimeConfig(
 )
 
 handler = build_initial_state(runtime_config, DEFAULT_APP_SETTINGS)
+comfyui_service = ComfyUIService(
+    project_root=PROJECT_ROOT,
+    app_data_dir=APP_DATA_DIR,
+    data_dir=MEDIA_UPLOAD_ROOT,
+    models_dir=handler.models.models_dir,
+)
 
 auth_token = os.environ.get("LTX_AUTH_TOKEN", "")
 admin_token = os.environ.get("LTX_ADMIN_TOKEN", "")
@@ -287,6 +294,7 @@ app = create_app(
     static_dir=FRONTEND_DIST_DIR if FRONTEND_DIST_DIR.exists() else None,
     media_roots=[OUTPUTS_DIR, MEDIA_UPLOAD_ROOT],
     media_upload_root=MEDIA_UPLOAD_ROOT,
+    comfyui_service=comfyui_service,
 )
 
 

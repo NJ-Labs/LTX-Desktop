@@ -10,6 +10,7 @@ import { logger } from './lib/logger'
 import { Home } from './views/Home'
 import { Project } from './views/Project'
 import { Playground } from './views/Playground'
+import { ComfyUI } from './views/ComfyUI'
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
 import { SettingsModal, type SettingsTabId } from './components/SettingsModal'
@@ -389,6 +390,8 @@ function AppContent() {
         return <Project />
       case 'playground':
         return <Playground />
+      case 'comfyui':
+        return <ComfyUI />
       default:
         return <Home />
     }

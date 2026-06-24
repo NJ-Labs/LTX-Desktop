@@ -29,6 +29,30 @@ extraResources:
       - "!outputs/**"
       - "!models/**"
       - "!tests/**"
+  - from: ComfyUI
+    to: ComfyUI
+    filter:
+      - "**/*"
+      - "!.git/**"
+      - "!.venv/**"
+      - "!__pycache__/**"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
+      - "!input/**"
+      - "!output/**"
+      - "!models/**"
+      - "!temp/**"
+      - "!user/**"
+      - "!tests/**"
+      - "!tests-unit/**"
+  - from: ComfyUI-LTXVideo
+    to: ComfyUI/custom_nodes/ComfyUI-LTXVideo
+    filter:
+      - "**/*"
+      - "!.git/**"
+      - "!__pycache__/**"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
   - from: python-deps-hash.txt
     to: python-deps-hash.txt
 

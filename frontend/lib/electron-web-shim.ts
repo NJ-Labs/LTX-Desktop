@@ -3,6 +3,18 @@ type BackendHealthStatus = {
   exitCode?: number | null
 }
 
+type ComfyUIStatus = {
+  state: 'stopped' | 'starting' | 'running' | 'error'
+  url?: string
+  port?: number
+  error?: string
+  ltxDataPath: string
+  ltxModelsPath: string
+  inputPath: string
+  outputPath: string
+  userPath: string
+}
+
 type ElectronApi = Window['electronAPI']
 
 declare global {
@@ -29,6 +41,15 @@ export function installWebElectronShim(): void {
   }
 
   const aliveStatus: BackendHealthStatus = { status: 'alive', exitCode: null }
+  const comfyStatus: ComfyUIStatus = {
+    state: 'error',
+    error: 'ComfyUI is available only in the desktop app.',
+    ltxDataPath: '',
+    ltxModelsPath: '',
+    inputPath: '',
+    outputPath: '',
+    userPath: '',
+  }
 
   const shim: ElectronApi = {
     getBackend: async () => ({ url: browserBackendUrl(), token: '' }),
@@ -80,6 +101,8 @@ export function installWebElectronShim(): void {
     startPythonSetup: async () => {},
     startPythonBackend: async () => {},
     getBackendHealthStatus: async () => aliveStatus,
+    startComfyUI: async () => comfyStatus,
+    getComfyUIStatus: async () => comfyStatus,
     onPythonSetupProgress: () => {},
     removePythonSetupProgress: () => {},
     onBackendHealthStatus: () => () => {},

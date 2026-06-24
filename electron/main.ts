@@ -8,6 +8,7 @@ import { registerFileHandlers } from './ipc/file-handlers'
 import { registerLogHandlers } from './ipc/log-handlers'
 import { registerVideoProcessingHandlers } from './ipc/video-processing-handlers'
 import { initSessionLog } from './logging-management'
+import { stopComfyUI } from './comfyui-service'
 import { stopPythonBackend } from './python-backend'
 import { initAutoUpdater } from './updater'
 import { createWindow, getMainWindow } from './window'
@@ -64,6 +65,7 @@ if (!gotLock) {
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
+      stopComfyUI()
       stopPythonBackend()
       app.quit()
     }
@@ -77,6 +79,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     stopExportProcess()
+    stopComfyUI()
     stopPythonBackend()
   })
 }

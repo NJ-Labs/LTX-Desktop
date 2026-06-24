@@ -11,6 +11,18 @@ interface BackendHealthStatus {
   exitCode?: number | null
 }
 
+interface ComfyUIStatus {
+  state: 'stopped' | 'starting' | 'running' | 'error'
+  url?: string
+  port?: number
+  error?: string
+  ltxDataPath: string
+  ltxModelsPath: string
+  inputPath: string
+  outputPath: string
+  userPath: string
+}
+
 interface Window {
   electronAPI: {
     getBackend: () => Promise<{ url: string; token: string }>
@@ -56,6 +68,8 @@ interface Window {
     startPythonSetup: () => Promise<void>
     startPythonBackend: () => Promise<void>
     getBackendHealthStatus: () => Promise<BackendHealthStatus | null>
+    startComfyUI: () => Promise<ComfyUIStatus>
+    getComfyUIStatus: () => Promise<ComfyUIStatus>
     onPythonSetupProgress: (cb: (data: unknown) => void) => void
     removePythonSetupProgress: () => void
     onBackendHealthStatus: (cb: (data: BackendHealthStatus) => void) => (() => void)

@@ -54,11 +54,15 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
     GIT_SSL_NO_VERIFY=1 uv sync --frozen --no-dev --no-install-project
 
 COPY backend ./
+COPY ComfyUI /app/ComfyUI
 
 COPY --from=frontend-build /app/dist /app/dist
 
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
     GIT_SSL_NO_VERIFY=1 uv sync --frozen --no-dev
+
+RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
+    GIT_SSL_NO_VERIFY=1 uv pip install -r /app/ComfyUI/requirements.txt
 
 COPY scripts/airgap-entrypoint.sh /usr/local/bin/airgap-entrypoint.sh
 

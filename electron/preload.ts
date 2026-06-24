@@ -94,6 +94,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startPythonSetup: (): Promise<void> => ipcRenderer.invoke('start-python-setup'),
   startPythonBackend: (): Promise<void> => ipcRenderer.invoke('start-python-backend'),
   getBackendHealthStatus: (): Promise<BackendHealthStatus | null> => ipcRenderer.invoke('get-backend-health-status'),
+  startComfyUI: (): Promise<ComfyUIStatus> => ipcRenderer.invoke('start-comfyui'),
+  getComfyUIStatus: (): Promise<ComfyUIStatus> => ipcRenderer.invoke('get-comfyui-status'),
   onPythonSetupProgress: (cb: (data: unknown) => void) => {
     ipcRenderer.on('python-setup-progress', (_: unknown, data: unknown) => cb(data))
   },
@@ -143,6 +145,18 @@ interface BackendHealthStatus {
   exitCode?: number | null
 }
 
+interface ComfyUIStatus {
+  state: 'stopped' | 'starting' | 'running' | 'error'
+  url?: string
+  port?: number
+  error?: string
+  ltxDataPath: string
+  ltxModelsPath: string
+  inputPath: string
+  outputPath: string
+  userPath: string
+}
+
 // Type definitions for the exposed API
 declare global {
   interface Window {
@@ -189,6 +203,8 @@ declare global {
       startPythonSetup: () => Promise<void>
       startPythonBackend: () => Promise<void>
       getBackendHealthStatus: () => Promise<BackendHealthStatus | null>
+      startComfyUI: () => Promise<ComfyUIStatus>
+      getComfyUIStatus: () => Promise<ComfyUIStatus>
       onPythonSetupProgress: (cb: (data: unknown) => void) => void
       removePythonSetupProgress: () => void
       onBackendHealthStatus: (cb: (data: BackendHealthStatus) => void) => (() => void)

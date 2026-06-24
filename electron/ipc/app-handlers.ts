@@ -2,6 +2,7 @@ import { app, dialog, ipcMain } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import { checkGPU } from '../gpu'
+import { getComfyUIStatus, startComfyUI } from '../comfyui-service'
 import { isPythonReady, downloadPythonEmbed } from '../python-setup'
 import { getBackendHealthStatus, getBackendUrl, getAuthToken, getAdminToken, startPythonBackend } from '../python-backend'
 import { getMainWindow } from '../window'
@@ -145,6 +146,14 @@ export function registerAppHandlers(): void {
 
   ipcMain.handle('get-backend-health-status', () => {
     return getBackendHealthStatus()
+  })
+
+  ipcMain.handle('start-comfyui', async () => {
+    return await startComfyUI()
+  })
+
+  ipcMain.handle('get-comfyui-status', () => {
+    return getComfyUIStatus()
   })
 
   ipcMain.handle('get-analytics-state', () => {

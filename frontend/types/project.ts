@@ -423,7 +423,7 @@ export interface ProjectDetails {
   coverImage?: string
 }
 
-export type ViewType = 'home' | 'project' | 'playground'
+export type ViewType = 'home' | 'project' | 'playground' | 'comfyui'
 export type ProjectTab = 'gen-space' | 'video-editor'
 
 // Default tracks for new timelines

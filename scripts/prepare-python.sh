@@ -26,6 +26,8 @@ ARCH="${ARCH:-$(uname -m)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BACKEND_DIR="$PROJECT_DIR/backend"
+COMFYUI_DIR="$PROJECT_DIR/ComfyUI"
+LTXVIDEO_DIR="$PROJECT_DIR/ComfyUI-LTXVideo"
 OUTPUT_PATH="$PROJECT_DIR/$OUTPUT_DIR"
 TEMP_DIR="$(mktemp -d)"
 
@@ -92,6 +94,22 @@ uv export --frozen --no-hashes --no-editable --no-emit-project \
     --no-header --no-annotate \
     --project "$BACKEND_DIR" \
     > "$REQUIREMENTS_FILE"
+
+if [ -f "$COMFYUI_DIR/requirements.txt" ]; then
+    {
+        echo ""
+        echo "# ComfyUI embedded runtime"
+        cat "$COMFYUI_DIR/requirements.txt"
+    } >> "$REQUIREMENTS_FILE"
+fi
+
+if [ -f "$LTXVIDEO_DIR/requirements.txt" ]; then
+    {
+        echo ""
+        echo "# ComfyUI-LTXVideo custom nodes"
+        cat "$LTXVIDEO_DIR/requirements.txt"
+    } >> "$REQUIREMENTS_FILE"
+fi
 
 DEP_COUNT=$(grep -c '^\S' "$REQUIREMENTS_FILE" || true)
 echo "  Exported $DEP_COUNT dependencies from uv.lock"

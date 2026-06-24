@@ -21,6 +21,7 @@ from _routes.health import router as health_router
 from _routes.ic_lora import router as ic_lora_router
 from _routes.image_gen import router as image_gen_router
 from _routes.library import router as library_router
+from _routes.comfyui import init_comfyui_service, router as comfyui_router
 from _routes.models import router as models_router
 from _routes.prompt_enhancer import router as prompt_enhancer_router
 from _routes.suggest_gap_prompt import router as suggest_gap_prompt_router
@@ -32,6 +33,7 @@ from state import init_state_service
 
 if TYPE_CHECKING:
     from app_handler import AppHandler
+    from services.comfyui_service import ComfyUIService
 
 DEFAULT_ALLOWED_ORIGINS: list[str] = [
     "http://localhost:5173",
@@ -49,9 +51,11 @@ def create_app(
     static_dir: Path | None = None,
     media_roots: list[Path] | None = None,
     media_upload_root: Path | None = None,
+    comfyui_service: "ComfyUIService | None" = None,
 ) -> FastAPI:
     """Create a configured FastAPI app bound to the provided handler."""
     init_state_service(handler)
+    init_comfyui_service(comfyui_service)
 
     serve_frontend = static_dir is not None and static_dir.exists()
 
@@ -132,6 +136,7 @@ def create_app(
     app.include_router(ic_lora_router)
     app.include_router(runtime_policy_router)
     app.include_router(library_router)
+    app.include_router(comfyui_router)
 
     allowed_media_roots = [root.resolve() for root in (media_roots or [])]
 
@@ -210,7 +215,7 @@ def create_app(
 
         @app.get("/{full_path:path}", response_model=None)
         async def _serve_frontend_asset(full_path: str) -> FileResponse | JSONResponse:  # pyright: ignore[reportUnusedFunction]
-            if full_path.startswith(("api/", "health", "readyz", "docs", "openapi.json", "media")):
+            if full_path.startswith(("api/", "comfyui-server", "health", "readyz", "docs", "openapi.json", "media")):
                 return JSONResponse(status_code=404, content={"error": "Not Found"})
 
             candidate = static_dir / full_path

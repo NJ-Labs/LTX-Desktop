@@ -1,10 +1,9 @@
 import { useState } from 'react'
-import { Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap, Loader2 } from 'lucide-react'
+import { Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Workflow } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { PlaygroundGallery } from '../components/PlaygroundGallery'
 import { ProjectDetailsModal } from '../components/ProjectDetailsModal'
-import { usePreloadModels } from '../hooks/use-preload-models'
 import { Button } from '../components/ui/button'
 import type { Project, ProjectDetails } from '../types/project'
 
@@ -107,7 +106,7 @@ function ProjectCard({ project, onOpen, onDelete, onEdit }: {
 }
 
 export function Home() {
-  const { projects, createProject, deleteProject, updateProject, openProject, openPlayground } = useProjects()
+  const { projects, createProject, deleteProject, updateProject, openProject, openPlayground, openComfyUI } = useProjects()
   const [isCreating, setIsCreating] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
 
@@ -148,6 +147,13 @@ export function Home() {
             >
               <Sparkles className="h-4 w-4" />
               Playground
+            </button>
+            <button
+              onClick={openComfyUI}
+              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
+            >
+              <Workflow className="h-4 w-4" />
+              ComfyUI
             </button>
           </div>
           

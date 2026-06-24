@@ -50,6 +50,7 @@ interface ProjectContextType {
   openProject: (id: string) => void
   goHome: () => void
   openPlayground: () => void
+  openComfyUI: () => void
   
   // Cross-view communication (editor → gen space)
   genSpaceEditImageUrl: string | null
@@ -105,6 +106,50 @@ const PLAYGROUND_STORAGE_KEY = 'ltx-playground-assets'
 // Folder name used when copying Playground-generated videos into the shared
 // assets directory. Distinct from real project IDs (which are `project-...`).
 export const PLAYGROUND_ASSET_FOLDER = 'playground'
+
+function viewFromRoute(): ViewType {
+  if (typeof window === 'undefined') return 'home'
+  const hashPath = window.location.hash.startsWith('#/')
+    ? window.location.hash.slice(1)
+    : ''
+  const route = hashPath || window.location.pathname
+  if (route === '/playground') return 'playground'
+  if (route === '/project') return 'project'
+  if (route === '/comfyui') return 'comfyui'
+  return 'home'
+}
+
+function routeForView(view: ViewType): string {
+  switch (view) {
+    case 'project':
+      return '/project'
+    case 'playground':
+      return '/playground'
+    case 'comfyui':
+      return '/comfyui'
+    case 'home':
+    default:
+      return '/'
+  }
+}
+
+function pushRouteForView(view: ViewType): void {
+  if (typeof window === 'undefined') return
+  const route = routeForView(view)
+
+  if (window.location.protocol === 'file:') {
+    const base = window.location.pathname
+    const next = view === 'home' ? base : `${base}#${route}`
+    if (`${window.location.pathname}${window.location.hash}` !== next) {
+      window.history.pushState({ view }, '', next)
+    }
+    return
+  }
+
+  if (window.location.pathname !== route) {
+    window.history.pushState({ view }, '', route)
+  }
+}
 
 // Migrate old projects that don't have timelines
 function migrateProject(project: Project): Project {
@@ -213,7 +258,7 @@ function loadPlaygroundAssetsFromStorage(): Asset[] {
 }
 
 export function ProjectProvider({ children }: { children: React.ReactNode }) {
-  const [currentView, setCurrentView] = useState<ViewType>('home')
+  const [currentViewState, setCurrentViewState] = useState<ViewType>(() => viewFromRoute())
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
   const [currentTab, setCurrentTab] = useState<ProjectTab>('gen-space')
   const [genSpaceEditImageUrl, setGenSpaceEditImageUrl] = useState<string | null>(null)
@@ -229,6 +274,24 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const isInitializedRef = useRef(false)
   const webReadyRef = useRef(false)
   const librarySaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const currentView = currentViewState
+
+  const setCurrentView = useCallback((view: ViewType) => {
+    setCurrentViewState(view)
+    pushRouteForView(view)
+  }, [])
+
+  useEffect(() => {
+    const handleRouteChange = () => {
+      setCurrentViewState(viewFromRoute())
+    }
+    window.addEventListener('popstate', handleRouteChange)
+    window.addEventListener('hashchange', handleRouteChange)
+    return () => {
+      window.removeEventListener('popstate', handleRouteChange)
+      window.removeEventListener('hashchange', handleRouteChange)
+    }
+  }, [])
 
   // Mark as initialized after first render.
   // Desktop is ready immediately (localStorage loaded synchronously above).
@@ -617,16 +680,21 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     setCurrentProjectId(id)
     setCurrentView('project')
     setCurrentTab('gen-space')
-  }, [])
+  }, [setCurrentView])
   
   const goHome = useCallback(() => {
     setCurrentView('home')
     setCurrentProjectId(null)
-  }, [])
+  }, [setCurrentView])
   
   const openPlayground = useCallback(() => {
     setCurrentView('playground')
-  }, [])
+  }, [setCurrentView])
+
+  const openComfyUI = useCallback(() => {
+    setCurrentProjectId(null)
+    setCurrentView('comfyui')
+  }, [setCurrentView])
   
   return (
     <ProjectContext.Provider value={{
@@ -663,6 +731,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       openProject,
       goHome,
       openPlayground,
+      openComfyUI,
       genSpaceEditImageUrl,
       setGenSpaceEditImageUrl,
       genSpaceEditMode,
