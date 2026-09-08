@@ -15,6 +15,7 @@ import { useRetake } from '../hooks/use-retake'
 import { useIcLora } from '../hooks/use-ic-lora'
 import { useBackend } from '../hooks/use-backend'
 import { useProjects, PLAYGROUND_ASSET_FOLDER } from '../contexts/ProjectContext'
+import { ComfyWorkflowPanel } from '../components/ComfyWorkflowPanel'
 import { useAppSettings } from '../contexts/AppSettingsContext'
 import { fileUrlToPath } from '../lib/url-to-path'
 import { copyToAssetFolder } from '../lib/asset-copy'
@@ -46,10 +47,11 @@ const DEFAULT_SETTINGS: GenerationSettings = {
 }
 
 export function Playground() {
-  const { goHome, addPlaygroundAsset } = useProjects()
+  const { goHome, addPlaygroundAsset, playgroundAssets, togglePlaygroundFavorite } = useProjects()
   const { forceApiGenerations, shouldVideoGenerateWithLtxApi } = useAppSettings()
   const [mode, setMode] = useState<GenerationMode>('text-to-video')
   const [prompt, setPrompt] = useState('')
+  const [imageStrength, setImageStrength] = useState(0.6)
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
   const [selectedAudio, setSelectedAudio] = useState<string | null>(null)
   const [settings, setSettings] = useState<GenerationSettings>(() => ({ ...DEFAULT_SETTINGS }))
@@ -89,7 +91,9 @@ export function Playground() {
     statusMessage, 
     videoUrl,
     videoPath,
-    imageUrl, 
+    imageUrl,
+    imageUrls,
+    imagePaths,
     error: generationError,
     generate,
     generateImage,
@@ -159,6 +163,9 @@ export function Playground() {
 
   // Persist completed Playground generations to the global Playground gallery (Home)
   const [lastPrompt, setLastPrompt] = useState('')
+  const [imageAssetIds, setImageAssetIds] = useState<Record<string, string>>({})
+  const persistedImageKeysRef = useRef(new Set<string>())
+  const imageSubmissionRef = useRef<{ prompt: string; settings: GenerationSettings; source?: string; strength: number } | null>(null)
   const persistedVideoKeyRef = useRef<string | null>(null)
   const persistedRetakeKeyRef = useRef<string | null>(null)
   const persistedIcLoraKeyRef = useRef<string | null>(null)
@@ -218,7 +225,8 @@ export function Playground() {
     if (mode === 'text-to-image') {
       if (!prompt.trim()) return
       // Text-to-image behavior remains tied to raw forceApiGenerations in useGeneration.
-      generateImage(prompt, settings)
+      imageSubmissionRef.current = { prompt, settings: { ...settings }, source: selectedImage || undefined, strength: imageStrength }
+      generateImage(prompt, settings, selectedImage ? fileUrlToPath(selectedImage) : null, imageStrength)
     } else {
       const effectiveVideoSettings = shouldVideoGenerateWithLtxApi
         ? sanitizeForcedApiVideoSettings(settings)
@@ -286,6 +294,40 @@ export function Playground() {
     resetIcLora()
     reset()
   }
+
+  // Keep every generated image variation in the Playground library.
+  useEffect(() => {
+    const submission = imageSubmissionRef.current
+    if (!submission || isGenerating || imageUrls.length === 0) return
+    for (let index = 0; index < imageUrls.length; index++) {
+      const url = imageUrls[index]
+      const path = imagePaths[index] || url
+      if (persistedImageKeysRef.current.has(path)) continue
+      persistedImageKeysRef.current.add(path)
+      void (async () => {
+        try {
+          const copied = await copyToAssetFolder(path, PLAYGROUND_ASSET_FOLDER)
+          const finalPath = copied?.path ?? path
+          const finalUrl = copied?.url ?? url
+          const saved = submission.settings
+          const savedAsset = addPlaygroundAsset({
+            type: 'image', path: finalPath, url: finalUrl, prompt: submission.prompt, resolution: saved.imageResolution,
+            generationParams: {
+              mode: 'text-to-image', prompt: submission.prompt, model: saved.model, duration: 0,
+              resolution: saved.imageResolution, fps: saved.fps, audio: false, cameraMotion: 'none',
+              imageAspectRatio: saved.imageAspectRatio, imageSteps: saved.imageSteps,
+              inputImageUrl: submission.source, imageStrength: submission.strength,
+            },
+            takes: [{ url: finalUrl, path: finalPath, createdAt: Date.now() }], activeTakeIndex: 0,
+          })
+          setImageAssetIds(previous => ({ ...previous, [url]: savedAsset.id }))
+        } catch (err) {
+          persistedImageKeysRef.current.delete(path)
+          logger.error('Failed to save Playground image: ' + String(err))
+        }
+      })()
+    }
+  }, [imageUrls, imagePaths, isGenerating, addPlaygroundAsset])
 
   // Persist completed video generations (T2V/I2V/A2V) to the Playground gallery
   useEffect(() => {
@@ -466,6 +508,7 @@ export function Playground() {
         {/* Left Panel - Controls */}
         <div className="w-[500px] border-r border-zinc-800 p-6 overflow-y-auto">
           <div className="space-y-6">
+            <details className="border-b border-border pb-4"><summary className="cursor-pointer text-sm font-medium py-2 focus-visible:ring-2 focus-visible:ring-ring">Run a saved ComfyUI workflow</summary><div className="pt-4"><ComfyWorkflowPanel /></div></details>
             {/* Mode Tabs */}
             <ModeTabs
               mode={mode}
@@ -473,6 +516,8 @@ export function Playground() {
               disabled={isBusy}
               showIcLora={!forceApiGenerations}
             />
+
+            {mode === 'text-to-image' && <div className="space-y-3"><ImageUploader selectedImage={selectedImage} onImageSelect={setSelectedImage} destinationFolder={PLAYGROUND_ASSET_FOLDER} />{selectedImage && <label className="block text-sm text-zinc-300">Edit strength: {Math.round(imageStrength * 100)}%<input aria-label="Image edit strength" type="range" min="0.05" max="1" step="0.05" value={imageStrength} onChange={event => setImageStrength(Number(event.target.value))} className="block w-full mt-2 accent-blue-500" /><span className="text-xs text-zinc-400">Lower values keep more of the source image. Requires local generation.</span></label>}</div>}
 
             {/* Image Upload - Always shown in video mode (optional: makes it I2V) */}
             {isVideoMode && !isRetakeMode && (
@@ -700,6 +745,9 @@ export function Playground() {
               progress={progress}
               statusMessage={statusMessage}
               onCreateVideo={handleCreateVideoFromImage}
+              onEdit={() => { if (imageUrl) { setSelectedImage(imageUrl); setMode('text-to-image') } }}
+              isFavorite={playgroundAssets.find(asset => asset.id === imageAssetIds[imageUrl ?? ''])?.favorite}
+              onToggleFavorite={imageAssetIds[imageUrl ?? ''] ? () => togglePlaygroundFavorite(imageAssetIds[imageUrl!]) : undefined}
             />
           ) : mode === 'retake' ? (
             <VideoPlayer

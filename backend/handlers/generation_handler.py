@@ -91,6 +91,7 @@ class GenerationHandler(StateHandlerBase):
         """
         if self.is_generation_running():
             return False
+        self.state.native_run_id = generation_id
         # Clear any stale terminal generation so polling reflects the new job.
         match self.state.gpu_slot:
             case GpuSlot(generation=(GenerationComplete() | GenerationError() | GenerationCancelled())):
@@ -105,6 +106,20 @@ class GenerationHandler(StateHandlerBase):
                 phase="queued", progress=0, current_step=None, total_steps=None, updated_at=time.time()
             ),
         )
+        return True
+
+    @with_state_lock
+    def release_generation(self, generation_id: str) -> None:
+        """Release the execution lease after the native worker exits."""
+        if self.state.native_run_id == generation_id:
+            self.state.native_run_id = None
+
+    @with_state_lock
+    def try_reserve_native_operation(self, operation_id: str) -> bool:
+        """Reserve GPU execution without creating a pollable generation."""
+        if self.is_generation_running():
+            return False
+        self.state.native_run_id = operation_id
         return True
 
     @with_state_lock
@@ -367,6 +382,22 @@ class GenerationHandler(StateHandlerBase):
 
     @with_state_lock
     def is_generation_running(self) -> bool:
+        if self.state.comfy_run_id is not None:
+            return True
+        if self.state.native_run_id is not None:
+            return True
         if self._running_slot() is not None:
             return True
         return isinstance(self.state.pending_generation, GenerationRunning)
+
+    @with_state_lock
+    def try_reserve_comfy(self, run_id: str) -> bool:
+        if self.is_generation_running():
+            return False
+        self.state.comfy_run_id = run_id
+        return True
+
+    @with_state_lock
+    def release_comfy(self, run_id: str) -> None:
+        if self.state.comfy_run_id == run_id:
+            self.state.comfy_run_id = None

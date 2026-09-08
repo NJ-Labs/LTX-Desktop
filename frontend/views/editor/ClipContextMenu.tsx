@@ -50,6 +50,7 @@ export interface ClipContextMenuProps {
   setSelectedAssetIds: React.Dispatch<React.SetStateAction<Set<string>>>
   setI2vClipId: (v: string | null) => void
   setI2vPrompt: (v: string) => void
+  onExtendClip: (clip: TimelineClip) => void
   onRetakeClip: (clip: TimelineClip) => void
   onICLoraClip: (clip: TimelineClip) => void
   canUseIcLora: boolean
@@ -130,6 +131,7 @@ export function ClipContextMenu({
   setI2vClipId,
   setI2vPrompt,
   onRetakeClip,
+  onExtendClip,
   onICLoraClip,
   canUseIcLora,
   onCaptureFrameForVideo,
@@ -246,6 +248,7 @@ export function ClipContextMenu({
           setSelectedAssetIds={setSelectedAssetIds}
           setI2vClipId={setI2vClipId}
           setI2vPrompt={setI2vPrompt}
+          onExtendClip={onExtendClip}
           onRetakeClip={onRetakeClip}
           onICLoraClip={onICLoraClip}
           canUseIcLora={canUseIcLora}
@@ -280,7 +283,7 @@ function SingleClipMenu({
   duplicateClip, splitClipAtPlayhead, removeClip, updateClip,
   getLiveAsset, getMaxClipDuration,
   setAssetFilter, setSelectedBin, setTakesViewAssetId, setSelectedAssetIds,
-  setI2vClipId, setI2vPrompt, onRetakeClip, onICLoraClip, canUseIcLora,
+  setI2vClipId, setI2vPrompt, onRetakeClip, onExtendClip, onICLoraClip, canUseIcLora,
   onCaptureFrameForVideo,
   onCreateVideoFromAudio,
   close,
@@ -311,6 +314,7 @@ function SingleClipMenu({
   setSelectedAssetIds: React.Dispatch<React.SetStateAction<Set<string>>>
   setI2vClipId: (v: string | null) => void
   setI2vPrompt: (v: string) => void
+  onExtendClip: (clip: TimelineClip) => void
   onRetakeClip: (clip: TimelineClip) => void
   onICLoraClip: (clip: TimelineClip) => void
   canUseIcLora: boolean
@@ -513,7 +517,7 @@ function SingleClipMenu({
 
           {isVideo && contextClip.assetId && (
             <MenuItem icon={ZoomIn} iconClass="text-zinc-500" label="Upscale (2x)"
-              disabled={true} title="Coming Soon!" onClick={() => {}} />
+              disabled={true} title="Upscaling timeline clips is not supported. Upscale the generated video before adding it to the timeline." onClick={() => {}} />
           )}
           {isImage && (
             <MenuItem icon={Film} iconClass="text-blue-400" label="Image to Video (I2V)"
@@ -522,6 +526,8 @@ function SingleClipMenu({
           )}
           {isVideo && contextClip.assetId && (
             <>
+              <MenuItem icon={Film} iconClass="text-purple-400" label="Extend video…"
+                onClick={() => { onExtendClip(contextClip); close() }} />
               <MenuItem icon={Film} iconClass="text-blue-400" label="Retake Section"
                 onClick={() => { onRetakeClip(contextClip); close() }} />
               {canUseIcLora && (

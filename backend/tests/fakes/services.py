@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Event
 from typing import Any, ClassVar
 
 from PIL import Image
@@ -675,6 +676,7 @@ class FakeImageGenerationPipeline:
     def __init__(self) -> None:
         self.device: str | None = None
         self.generate_calls: list[dict[str, Any]] = []
+        self.edit_calls: list[dict[str, Any]] = []
         self.raise_on_generate: Exception | None = None
 
     def generate(self, **kwargs: Any) -> FakeZitOutput:
@@ -682,6 +684,12 @@ class FakeImageGenerationPipeline:
         if self.raise_on_generate is not None:
             raise self.raise_on_generate
         return FakeZitOutput(color="blue")
+
+    def edit(self, **kwargs: Any) -> FakeZitOutput:
+        self.edit_calls.append(kwargs)
+        if self.raise_on_generate is not None:
+            raise self.raise_on_generate
+        return FakeZitOutput(color="green")
 
     def to(self, device: str) -> None:
         self.device = device
@@ -708,12 +716,19 @@ class FakeIcLoraPipeline:
         if pipeline is None:
             raise RuntimeError("FakeIcLoraPipeline singleton is not bound")
         pipeline.create_calls.append({"lora_strength": lora_strength})
+        pipeline.create_entered.set()
+        if pipeline.block_create:
+            if not pipeline.allow_create.wait(timeout=5):
+                raise RuntimeError("Timed out waiting to create fake IC-LoRA pipeline")
         return pipeline
 
     def __init__(self) -> None:
         self.create_calls: list[dict[str, Any]] = []
         self.generate_calls: list[dict[str, Any]] = []
         self.raise_on_generate: Exception | None = None
+        self.block_create = False
+        self.create_entered = Event()
+        self.allow_create = Event()
 
     def generate(self, **kwargs: Any) -> None:
         self.generate_calls.append(kwargs)
@@ -836,6 +851,10 @@ class FakeRetakePipeline:
 
     def __init__(self) -> None:
         self.generate_calls: list[dict[str, Any]] = []
+        self.extend_calls: list[dict[str, Any]] = []
+        self.extend_entered = Event()
+        self.allow_extend = Event()
+        self.block_extend = False
         self.raise_on_generate: Exception | None = None
 
     def generate(self, **kwargs: Any) -> None:
@@ -846,6 +865,18 @@ class FakeRetakePipeline:
         output_path = Path(kwargs["output_path"])
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"fake-retake-video")
+
+    def extend(self, **kwargs: Any) -> None:
+        self.extend_calls.append(kwargs)
+        output_path = Path(kwargs["output_path"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"partial")
+        self.extend_entered.set()
+        if self.block_extend and not self.allow_extend.wait(timeout=5):
+            raise RuntimeError("Timed out waiting to extend fake video")
+        if self.raise_on_generate is not None:
+            raise self.raise_on_generate
+        output_path.write_bytes(b"fake-extended-video")
 
 
 class FakeTextEncoder:

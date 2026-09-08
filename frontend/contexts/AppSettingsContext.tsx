@@ -70,6 +70,8 @@ interface AppSettingsContextValue {
   isLoaded: boolean
   runtimePolicyLoaded: boolean
   updateSettings: (patch: Partial<AppSettings> | ((prev: AppSettings) => AppSettings)) => void
+  settingsSaveError: string | null
+  retrySettingsSave: () => void
   refreshSettings: () => Promise<void>
   saveLtxApiKey: (value: string) => Promise<void>
   saveFalApiKey: (value: string) => Promise<void>
@@ -126,6 +128,9 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
 
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
+  const [settingsSaveError, setSettingsSaveError] = useState<string | null>(null)
+  const [saveAttempt, setSaveAttempt] = useState(0)
+  const retrySettingsSave = useCallback(() => setSaveAttempt(value => value + 1), [])
   const [isLoaded, setIsLoaded] = useState(false)
   const [runtimePolicyLoaded, setRuntimePolicyLoaded] = useState(false)
   const [forceApiGenerations, setForceApiGenerations] = useState(true)
@@ -252,21 +257,26 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   }, [backendProcessStatus, isLoaded, refreshSettings])
 
   useEffect(() => {
-    if (!isLoaded || backendProcessStatus !== 'alive') return
+    if (!isLoaded) return
+    if (backendProcessStatus !== 'alive') {
+      setSettingsSaveError('Settings cannot be saved while the backend is disconnected.')
+      return
+    }
+    let cancelled = false
     const syncTimer = setTimeout(async () => {
       try {
         const { hasLtxApiKey: _a, hasFalApiKey: _b, hasGeminiApiKey: _c, modelsDir: _d, hasPromptEnhancerApiKey: _e, ...syncPayload } = settings
-        await backendFetch('/api/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(syncPayload),
+        const response = await backendFetch('/api/settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(syncPayload),
         })
-      } catch {
-        // Best-effort settings sync.
+        if (!response.ok) throw new Error('Settings were not saved (' + response.status + '). Check the connection and retry.')
+        if (!cancelled) setSettingsSaveError(null)
+      } catch (error) {
+        if (!cancelled) setSettingsSaveError(error instanceof Error ? error.message : 'Settings could not be saved. Retry the save.')
       }
     }, 150)
-    return () => clearTimeout(syncTimer)
-  }, [backendProcessStatus, isLoaded, settings])
+    return () => { cancelled = true; clearTimeout(syncTimer) }
+  }, [backendProcessStatus, isLoaded, settings, saveAttempt])
 
   const updateSettings = useCallback((patch: Partial<AppSettings> | ((prev: AppSettings) => AppSettings)) => {
     if (typeof patch === 'function') {
@@ -345,6 +355,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       isLoaded,
       runtimePolicyLoaded,
       updateSettings,
+      settingsSaveError,
+      retrySettingsSave,
       refreshSettings,
       saveLtxApiKey,
       saveFalApiKey,
@@ -357,7 +369,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       serverDataDir,
       shouldVideoGenerateWithLtxApi,
     }),
-    [forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiConfig, saveFalApiKey, saveGeminiApiKey, saveLtxApiConfig, saveLtxApiKey, savePromptEnhancerApiKey, serverDataDir, settings, shouldVideoGenerateWithLtxApi, updateSettings],
+    [settingsSaveError, retrySettingsSave, forceApiGenerations, isLoaded, offlineMode, refreshSettings, runtimePolicyLoaded, saveFalApiConfig, saveFalApiKey, saveGeminiApiKey, saveLtxApiConfig, saveLtxApiKey, savePromptEnhancerApiKey, serverDataDir, settings, shouldVideoGenerateWithLtxApi, updateSettings],
   )
 
   return <AppSettingsContext.Provider value={contextValue}>{children}</AppSettingsContext.Provider>

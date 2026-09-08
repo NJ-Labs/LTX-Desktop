@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, cast
+from contextlib import contextmanager
+from importlib import import_module
+from importlib.metadata import version
+import threading
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import torch
 
@@ -13,6 +17,111 @@ from services.services_utils import AudioOrNone, TilingConfigType, device_suppor
 if TYPE_CHECKING:
     from ltx_core.components.guiders import MultiModalGuiderParams
     from ltx_core.types import LatentState
+
+
+_KEYFRAME_CONDITIONING_LOCK = threading.Lock()
+
+
+@contextmanager
+def guiding_image_conditionings(
+    images: list[ImageConditioningInput],
+    module_names: tuple[str, ...] = (),
+) -> Iterator[None]:
+    """Use pixel-frame keyframe positions for multi-keyframe generation.
+
+    The pinned 1.0 pipelines hardcode ``image_conditionings_by_replacing_latent``.
+    That helper interprets ``frame_idx`` as a latent-frame index, while the
+    public request and ``VideoConditionByKeyframeIndex`` use pixel-frame
+    positions.  Keep replacement semantics for ordinary frame-zero I2V and
+    scope the upstream guiding-latent helper to calls containing another frame.
+    """
+
+    if not any(image.frame_idx != 0 for image in images):
+        yield
+        return
+
+    helpers = import_module("ltx_pipelines.utils.helpers")
+    guiding = getattr(helpers, "image_conditionings_by_adding_guiding_latent")
+    targets = [helpers, *(import_module(name) for name in module_names)]
+
+    with _KEYFRAME_CONDITIONING_LOCK:
+        originals: list[tuple[object, object]] = []
+        for target in targets:
+            original = getattr(target, "image_conditionings_by_replacing_latent", None)
+            if original is not None:
+                originals.append((target, original))
+                setattr(target, "image_conditionings_by_replacing_latent", guiding)
+        try:
+            yield
+        finally:
+            for target, original in reversed(originals):
+                setattr(target, "image_conditionings_by_replacing_latent", original)
+
+
+class _ModelPathsFactory(Protocol):
+    @staticmethod
+    def from_split(
+        *,
+        transformer_path: str,
+        text_encoder_path: str | None,
+        video_vae_path: str,
+        audio_vae_path: str,
+        duration_head_path: str | None,
+    ) -> object: ...
+    @staticmethod
+    def from_monolith(
+        checkpoint_path: str,
+        gemma_root: str | None,
+        *,
+        video_vae_path: str | None,
+    ) -> object: ...
+
+
+def get_quantization_policy_class() -> type[Any]:
+    """Load the pinned ltx-core 1.0 packages in their safe import order."""
+    import_module("ltx_core.loader")
+    module = import_module("ltx_core.quantization")
+    return cast(type[Any], getattr(module, "QuantizationPolicy"))
+
+
+def build_model_paths(
+    checkpoint_path: str,
+    gemma_root: str | None,
+    *,
+    video_vae_path: str | None = None,
+    audio_vae_path: str | None = None,
+    duration_head_path: str | None = None,
+) -> object:
+    """Build the ltx-pipelines 1.2 path object for monolith or split weights.
+
+    The 1.3 pipeline API returns a named output and changes other call
+    contracts, so this adapter deliberately rejects it until its wrapper is
+    implemented and tested.
+    """
+
+    installed_version = version("ltx-pipelines")
+    if not installed_version.startswith("1.2."):
+        raise RuntimeError(
+            "LTX_MODEL_PATHS_RUNTIME_UNSUPPORTED: split/monolith ModelPaths adapter requires "
+            f"ltx-pipelines 1.2.x; installed {installed_version}"
+        )
+
+    model_paths = cast(
+        _ModelPathsFactory,
+        getattr(import_module("ltx_pipelines.utils.model_paths"), "ModelPaths"),
+    )
+
+    if (video_vae_path is None) != (audio_vae_path is None):
+        raise ValueError("Split LTX models require both video and audio VAE paths")
+    if video_vae_path is not None and audio_vae_path is not None:
+        return model_paths.from_split(
+            transformer_path=checkpoint_path,
+            text_encoder_path=gemma_root,
+            video_vae_path=video_vae_path,
+            audio_vae_path=audio_vae_path,
+            duration_head_path=duration_head_path,
+        )
+    return model_paths.from_monolith(checkpoint_path, gemma_root, video_vae_path=video_vae_path)
 
 
 def default_tiling_config() -> TilingConfigType:
@@ -71,7 +180,7 @@ class DistilledNativePipeline:
         self.device = device
         self.dtype = torch.bfloat16
 
-        from ltx_core.quantization import QuantizationPolicy
+        QuantizationPolicy = get_quantization_policy_class()
 
         self.model_ledger = ModelLedger(
             dtype=self.dtype,

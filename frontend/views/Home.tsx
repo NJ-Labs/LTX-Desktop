@@ -34,7 +34,6 @@ function ProjectCard({ project, onOpen, onDelete, onEdit }: {
   return (
     <div 
       className="group relative bg-zinc-900 rounded-lg overflow-hidden border border-zinc-800 hover:border-zinc-700 transition-colors cursor-pointer"
-      onClick={onOpen}
     >
       {/* Thumbnail */}
       <div className="aspect-video bg-zinc-800 flex items-center justify-center relative overflow-hidden">
@@ -68,13 +67,16 @@ function ProjectCard({ project, onOpen, onDelete, onEdit }: {
         <p className="text-xs text-zinc-500 mt-1">{formatDate(project.updatedAt)}</p>
       </div>
       
+      <button aria-label={`Open project ${project.name}`} onClick={onOpen} className="absolute inset-0 w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400" />
       {/* Menu button */}
       <button
+        aria-label={`Project options for ${project.name}`}
+        aria-expanded={showMenu}
         onClick={(e) => {
           e.stopPropagation()
           setShowMenu(!showMenu)
         }}
-        className="absolute top-2 right-2 p-1.5 rounded bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+        className="absolute top-2 right-2 z-10 p-1.5 rounded bg-black/50 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-black/70"
       >
         <MoreVertical className="h-4 w-4 text-white" />
       </button>

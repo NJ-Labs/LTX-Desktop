@@ -48,7 +48,7 @@ class TestEnhancePrompt:
             json={"prompt": "sunrise", "mode": "video"},
         ) as response:
             assert response.status_code == 200
-            assert response.iter_lines() == [
+            assert list(response.iter_lines()) == [
                 '{"delta": "A cinematic "}',
                 '{"delta": "sunrise."}',
             ]

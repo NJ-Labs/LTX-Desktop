@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from handlers.comfy_workflows_handler import ComfyWorkflowsHandler
+from services.comfy_workflow_store import ComfyWorkflowStore
 
 from state.app_settings import AppSettings
 from handlers import (
     DownloadHandler,
+    ExtendHandler,
     GenerationHandler,
     HealthHandler,
     IcLoraHandler,
@@ -174,6 +177,12 @@ class AppHandler:
         )
 
         self.generation = GenerationHandler(state=self.state, lock=self._lock, config=config)
+        self.comfy_workflows = ComfyWorkflowsHandler(
+            ComfyWorkflowStore(config.app_data_dir / "comfyui-library"),
+            reserve=self.generation.try_reserve_comfy,
+            release=self.generation.release_comfy,
+            unload_native=self.pipelines.unload_gpu_pipeline,
+        )
 
         self.video_generation = VideoGenerationHandler(
             state=self.state,
@@ -230,6 +239,15 @@ class AppHandler:
             generation_handler=self.generation,
             pipelines_handler=self.pipelines,
             text_handler=self.text,
+        )
+
+        self.extend = ExtendHandler(
+            state=self.state,
+            lock=self._lock,
+            generation_handler=self.generation,
+            pipelines_handler=self.pipelines,
+            text_handler=self.text,
+            config=config,
         )
 
         self.ic_lora = IcLoraHandler(

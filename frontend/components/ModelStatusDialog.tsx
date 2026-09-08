@@ -20,7 +20,9 @@ function StatusIcon({ level }: { level: ModelAvailabilityState['level'] }) {
   return <AlertCircle className="h-5 w-5 text-red-400" />
 }
 
-function titleFor(level: ModelAvailabilityState['level']): string {
+function titleFor(state: ModelAvailabilityState): string {
+  const { level } = state
+  if (state.label === 'Not loaded') return 'Local models are not loaded'
   if (level === 'active') return 'Models are active'
   if (level === 'partial') return 'Models are partially active'
   return 'Models are not active'
@@ -40,7 +42,7 @@ export function ModelStatusDialog({ isOpen, state, onClose, onOpenSettings }: Mo
           <div className="flex items-start gap-3">
             <StatusIcon level={state.level} />
             <div>
-              <h3 className="text-base font-semibold">{titleFor(state.level)}</h3>
+              <h3 className="text-base font-semibold">{titleFor(state)}</h3>
               <p className="mt-1 text-sm text-zinc-300">{state.summary}</p>
             </div>
           </div>

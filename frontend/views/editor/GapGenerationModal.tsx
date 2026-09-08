@@ -36,7 +36,7 @@ interface GapGenerationModalProps {
   regenStatusMessage: string
   regenProgress: number
   regenReset: () => void
-  handleGapGenerate: () => void
+  handleGapGenerate: (frames?: { start: string | null; end: string | null }) => Promise<void>
   deleteGap: (gap: TimelineGap) => void
   setSelectedGap: (gap: TimelineGap | null) => void
   gapApplyAudioToTrack: boolean
@@ -75,7 +75,7 @@ export function GapGenerationModal({
   gapSuggestionNoApiKey,
   anchorPosition,
 }: GapGenerationModalProps) {
-  if (!selectedGap) return null
+
 
   const isVideoMode = gapGenerateMode === 'text-to-video' || gapGenerateMode === 'image-to-video'
   const isImageMode = gapGenerateMode === 'text-to-image'
@@ -123,7 +123,10 @@ export function GapGenerationModal({
     setEndFrameOverride(null)
   }, [gapGenerateMode])
 
-  const displayedBeforeFrame = startFrameOverride ?? gapBeforeFrame
+  const [preparing, setPreparing] = useState(false)
+  const [generationError, setGenerationError] = useState('')
+  useEffect(() => () => { if (gapImageUrl) URL.revokeObjectURL(gapImageUrl) }, [gapImageUrl])
+  const displayedBeforeFrame = startFrameOverride ?? gapImageUrl ?? gapBeforeFrame
   const displayedAfterFrame = endFrameOverride ?? gapAfterFrame
 
   const handleFrameFileChange = (
@@ -139,11 +142,13 @@ export function GapGenerationModal({
     e.target.value = ''
   }
 
+  if (!selectedGap) return null
+
   return (
     <>
       {gapGenerateMode && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-[420px] max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden my-auto shrink-0">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-[420px] max-w-full max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden my-auto shrink-0">
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
               <div className="flex items-center gap-3">
@@ -182,8 +187,8 @@ export function GapGenerationModal({
                     <div className="absolute left-0 top-full mt-2 w-60 p-2.5 bg-zinc-800 border border-zinc-700 rounded-lg text-[10px] text-zinc-300 leading-relaxed invisible group-hover/info:visible opacity-0 group-hover/info:opacity-100 transition-opacity pointer-events-none shadow-xl z-20">
                       {isVideoMode ? (
                         <>
-                          <p>Only one conditioning frame can be used at a time.</p>
-                          <p className="mt-1.5">If <strong className="text-white">End frame</strong> is selected, it will be treated as the start frame, since the model does not currently support generating from an end frame. The video will then be generated from that frame and played in reverse.</p>
+                          <p>Select a start frame, an end frame, or both for keyframe interpolation.</p>
+                          <p className="mt-1.5">End-frame conditioning uses the final generated frame. Requires local generation.</p>
                         </>
                       ) : (
                         <p>Select frames from adjacent clips to provide context for the prompt.</p>
@@ -194,18 +199,20 @@ export function GapGenerationModal({
                 {/* Segmented toggle */}
                 <div className="flex bg-zinc-800 rounded-lg p-0.5 gap-0.5">
                   <button
-                    onClick={() => { if (startFrameEnabled) { setStartFrameEnabled(false) } else { setStartFrameEnabled(true); setEndFrameEnabled(false) } }}
+                    onClick={() => { if (startFrameEnabled) { setStartFrameEnabled(false) } else { setStartFrameEnabled(true) } }}
                     className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
                       startFrameEnabled ? 'bg-zinc-600 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
                     }`}
+                    aria-pressed={startFrameEnabled}
                   >
                     Start frame
                   </button>
                   <button
-                    onClick={() => { if (endFrameEnabled) { setEndFrameEnabled(false) } else { setEndFrameEnabled(true); setStartFrameEnabled(false) } }}
+                    onClick={() => { if (endFrameEnabled) { setEndFrameEnabled(false) } else { setEndFrameEnabled(true) } }}
                     className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
                       endFrameEnabled ? 'bg-zinc-600 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
                     }`}
+                    aria-pressed={endFrameEnabled}
                   >
                     End frame
                   </button>
@@ -218,7 +225,7 @@ export function GapGenerationModal({
                 {displayedBeforeFrame ? (
                   <div
                     className="relative w-[38%] h-full flex-shrink-0 overflow-hidden rounded-l-xl group/before cursor-pointer"
-                    onClick={() => { if (startFrameEnabled) { setStartFrameEnabled(false) } else { setStartFrameEnabled(true); setEndFrameEnabled(false) } }}
+                    onClick={() => { if (startFrameEnabled) { setStartFrameEnabled(false) } else { setStartFrameEnabled(true) } }}
                   >
                     <img
                       src={displayedBeforeFrame}
@@ -284,7 +291,7 @@ export function GapGenerationModal({
                 {displayedAfterFrame ? (
                   <div
                     className="relative w-[38%] h-full flex-shrink-0 overflow-hidden rounded-r-xl group/after cursor-pointer"
-                    onClick={() => { if (endFrameEnabled) { setEndFrameEnabled(false) } else { setEndFrameEnabled(true); setStartFrameEnabled(false) } }}
+                    onClick={() => { if (endFrameEnabled) { setEndFrameEnabled(false) } else { setEndFrameEnabled(true) } }}
                   >
                     <img
                       src={displayedAfterFrame}
@@ -459,6 +466,7 @@ export function GapGenerationModal({
               className="hidden"
             />
 
+            {generationError && <p role="alert" className="px-5 text-sm text-red-400">{generationError}</p>}
             {/* Footer */}
             <div className="px-5 py-3 flex items-center justify-end gap-2">
               <button
@@ -468,8 +476,13 @@ export function GapGenerationModal({
                 Cancel
               </button>
               <button
-                onClick={handleGapGenerate}
-                disabled={isRegenerating || !gapPrompt.trim()}
+                onClick={async () => {
+                  setPreparing(true); setGenerationError('')
+                  try { await handleGapGenerate(isVideoMode ? { start: startFrameEnabled ? displayedBeforeFrame : null, end: endFrameEnabled ? displayedAfterFrame : null } : undefined) }
+                  catch (error) { setGenerationError(error instanceof Error ? error.message : 'Could not prepare keyframes.') }
+                  finally { setPreparing(false) }
+                }}
+                disabled={preparing || isRegenerating || !gapPrompt.trim()}
                 className="px-4 py-1.5 rounded-md bg-blue-600 text-white text-sm hover:bg-blue-500 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
                 {isRegenerating ? (
@@ -478,7 +491,7 @@ export function GapGenerationModal({
                     Generating...
                   </>
                 ) : (
-                  'Generate'
+                  preparing ? 'Preparing keyframes...' : 'Generate'
                 )}
               </button>
             </div>
@@ -549,18 +562,20 @@ export function GapGenerationModal({
 
       {/* Hidden file inputs for replacing start/end frames */}
       <input
+        aria-label="Replace start keyframe"
         ref={startFrameInputRef}
         type="file"
         accept="image/*"
         className="hidden"
-        onChange={(e) => handleFrameFileChange(e, setStartFrameOverride, () => { setStartFrameEnabled(true); setEndFrameEnabled(false) })}
+        onChange={(e) => handleFrameFileChange(e, setStartFrameOverride, () => { setStartFrameEnabled(true) })}
       />
       <input
+        aria-label="Replace end keyframe"
         ref={endFrameInputRef}
         type="file"
         accept="image/*"
         className="hidden"
-        onChange={(e) => handleFrameFileChange(e, setEndFrameOverride, () => { setEndFrameEnabled(true); setStartFrameEnabled(false) })}
+        onChange={(e) => handleFrameFileChange(e, setEndFrameOverride, () => { setEndFrameEnabled(true) })}
       />
     </>
   )

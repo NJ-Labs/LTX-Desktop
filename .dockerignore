@@ -6,4 +6,13 @@ release
 backend/.venv
 backend/outputs
 backend/models
+ComfyUI/.venv
+ComfyUI/input
+ComfyUI/output
+ComfyUI/models
+ComfyUI/temp
+ComfyUI/user
+**/__pycache__
+.codex-tmp
+outputs
 .git

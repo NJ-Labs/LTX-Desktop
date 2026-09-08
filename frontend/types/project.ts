@@ -11,7 +11,9 @@ export interface GenerationParams {
   audio: boolean
   cameraMotion: string
   imageAspectRatio?: string
+  imageStrength?: number
   imageSteps?: number
+  imageConditionings?: Array<{ path: string; frame_idx: number; strength: number }>
   inputImageUrl?: string // For I2V: the input image used
   inputAudioUrl?: string // For A2V: the input audio used
   retakeVideoPath?: string

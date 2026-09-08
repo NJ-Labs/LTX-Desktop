@@ -10,12 +10,15 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING
 
+from PIL import Image, ImageOps
+
 from _routes._errors import HTTPError
 from api_types import GenerateImageRequest, GenerateImageResponse
 from handlers.base import StateHandlerBase
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from server_utils.gpu_errors import normalize_generation_error
+from server_utils.media_validation import normalize_optional_path, validate_image_file
 from services.interfaces import TaskRunner, ZitAPIClient
 from state.app_state_types import AppState
 
@@ -50,10 +53,14 @@ class ImageGenerationHandler(StateHandlerBase):
         if not self._generation.try_reserve_generation(generation_id):
             raise HTTPError(409, "Generation already in progress")
 
-        self._task_runner.run_background(
-            lambda: self._run_generation(req),
-            task_name="image-generation",
-        )
+        try:
+            self._task_runner.run_background(
+                lambda: self._run_generation(req, generation_id),
+                task_name="image-generation",
+            )
+        except Exception:
+            self._generation.release_generation(generation_id)
+            raise
 
         kind, payload, status_code = self._generation.get_async_outcome()
         if kind == "complete":
@@ -64,13 +71,15 @@ class ImageGenerationHandler(StateHandlerBase):
             raise HTTPError(status_code, str(payload) if payload else "Image generation failed")
         return GenerateImageResponse(status="started")
 
-    def _run_generation(self, req: GenerateImageRequest) -> None:
+    def _run_generation(self, req: GenerateImageRequest, generation_id: str) -> None:
         try:
             self.generate(req)
         except HTTPError as exc:
             self._generation.fail_generation(normalize_generation_error(exc.detail), status_code=exc.status_code)
         except Exception as exc:  # noqa: BLE001 - surface failure to async pollers
             self._generation.fail_generation(normalize_generation_error(exc))
+        finally:
+            self._generation.release_generation(generation_id)
 
     def generate(self, req: GenerateImageRequest) -> GenerateImageResponse:
         if self._generation.is_generation_cancelled():
@@ -79,6 +88,21 @@ class ImageGenerationHandler(StateHandlerBase):
         width = (req.width // 16) * 16
         height = (req.height // 16) * 16
         num_images = max(1, min(12, req.numImages))
+        source_image_path = normalize_optional_path(req.imagePath)
+        source_image: Image.Image | None = None
+        if source_image_path is not None:
+            if int(req.numSteps * req.strength) < 1:
+                raise HTTPError(400, "Image edit strength and steps must produce at least one denoising step")
+            validated_path = validate_image_file(source_image_path)
+            try:
+                with Image.open(validated_path) as opened:
+                    source_image = ImageOps.fit(
+                        opened.convert("RGB"),
+                        (width, height),
+                        method=Image.Resampling.LANCZOS,
+                    )
+            except Exception:
+                raise HTTPError(400, f"Invalid image file: {source_image_path}") from None
 
         generation_id = uuid.uuid4().hex[:8]
         settings = self.state.app_settings.model_copy(deep=True)
@@ -89,6 +113,8 @@ class ImageGenerationHandler(StateHandlerBase):
             seed = int(time.time()) % 2147483647
 
         if self.config.force_api_generations and not self.config.offline_mode:
+            if source_image is not None:
+                raise HTTPError(400, "FAL_IMAGE_EDIT_UNSUPPORTED")
             return self._generate_via_api(
                 prompt=req.prompt,
                 width=width,
@@ -108,6 +134,8 @@ class ImageGenerationHandler(StateHandlerBase):
                 num_inference_steps=req.numSteps,
                 seed=seed,
                 num_images=num_images,
+                source_image=source_image,
+                strength=req.strength,
             )
             self._generation.complete_generation(output_paths)
             return GenerateImageResponse(status="complete", image_paths=output_paths)
@@ -127,6 +155,8 @@ class ImageGenerationHandler(StateHandlerBase):
         num_inference_steps: int,
         seed: int | None,
         num_images: int,
+        source_image: Image.Image | None = None,
+        strength: float = 0.6,
     ) -> list[str]:
         if self._generation.is_generation_cancelled():
             raise RuntimeError("Generation was cancelled")
@@ -141,25 +171,42 @@ class ImageGenerationHandler(StateHandlerBase):
         outputs: list[str] = []
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        for i in range(num_images):
-            if self._generation.is_generation_cancelled():
-                raise RuntimeError("Generation was cancelled")
+        try:
+            for i in range(num_images):
+                if self._generation.is_generation_cancelled():
+                    raise RuntimeError("Generation was cancelled")
 
-            progress = 15 + int((i / num_images) * 80)
-            self._generation.update_progress("inference", progress, i, num_images)
+                progress = 15 + int((i / num_images) * 80)
+                self._generation.update_progress("inference", progress, i, num_images)
 
-            result = zit.generate(
-                prompt=prompt,
-                height=height,
-                width=width,
-                guidance_scale=0.0,
-                num_inference_steps=num_inference_steps,
-                seed=seed + i,
-            )
+                if source_image is None:
+                    result = zit.generate(
+                        prompt=prompt,
+                        height=height,
+                        width=width,
+                        guidance_scale=0.0,
+                        num_inference_steps=num_inference_steps,
+                        seed=seed + i,
+                    )
+                else:
+                    result = zit.edit(
+                        prompt=prompt,
+                        image=source_image,
+                        strength=strength,
+                        num_inference_steps=num_inference_steps,
+                        seed=seed + i,
+                    )
 
-            output_path = self.config.outputs_dir / f"zit_image_{timestamp}_{uuid.uuid4().hex[:8]}.png"
-            result.images[0].save(str(output_path))
-            outputs.append(str(output_path))
+                if self._generation.is_generation_cancelled():
+                    raise RuntimeError("Generation was cancelled")
+
+                output_path = self.config.outputs_dir / f"zit_image_{timestamp}_{uuid.uuid4().hex[:8]}.png"
+                outputs.append(str(output_path))
+                result.images[0].save(str(output_path))
+        except Exception:
+            for output in outputs:
+                Path(output).unlink(missing_ok=True)
+            raise
 
         if self._generation.is_generation_cancelled():
             raise RuntimeError("Generation was cancelled")

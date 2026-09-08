@@ -53,6 +53,7 @@ export function AssetContextMenu({
   deleteTakeFromAsset,
   setClips,
 }: AssetContextMenuProps) {
+  const activeTakeIndex = asset.activeTakeIndex ?? Math.max(0, (asset.takes?.length ?? 1) - 1)
   const isMulti = targetIds.length > 1
 
   return (
@@ -134,28 +135,28 @@ export function AssetContextMenu({
                 e.stopPropagation()
                 if (currentProjectId) {
                   pushAssetUndoRef.current?.()
-                  const idx = Math.max(0, (asset.activeTakeIndex ?? 0) - 1)
+                  const idx = Math.max(0, (activeTakeIndex) - 1)
                   setAssetActiveTake(currentProjectId, asset.id, idx)
                 }
               }}
-              disabled={(asset.activeTakeIndex ?? 0) === 0}
+              disabled={(activeTakeIndex) === 0}
               className="p-0.5 rounded hover:bg-zinc-600 text-zinc-400 hover:text-white disabled:text-zinc-600 disabled:hover:bg-transparent"
             >
               <ChevronLeft className="h-3 w-3" />
             </button>
             <span className="text-[10px] text-zinc-300 min-w-[28px] text-center">
-              {(asset.activeTakeIndex ?? 0) + 1}/{asset.takes.length}
+              {(activeTakeIndex) + 1}/{asset.takes.length}
             </span>
             <button
               onClick={(e) => {
                 e.stopPropagation()
                 if (currentProjectId && asset.takes) {
                   pushAssetUndoRef.current?.()
-                  const idx = Math.min(asset.takes.length - 1, (asset.activeTakeIndex ?? 0) + 1)
+                  const idx = Math.min(asset.takes.length - 1, (activeTakeIndex) + 1)
                   setAssetActiveTake(currentProjectId, asset.id, idx)
                 }
               }}
-              disabled={asset.takes && (asset.activeTakeIndex ?? 0) >= asset.takes.length - 1}
+              disabled={asset.takes && (activeTakeIndex) >= asset.takes.length - 1}
               className="p-0.5 rounded hover:bg-zinc-600 text-zinc-400 hover:text-white disabled:text-zinc-600 disabled:hover:bg-transparent"
             >
               <ChevronRight className="h-3 w-3" />
@@ -207,7 +208,7 @@ export function AssetContextMenu({
           </button>
           <button
             onClick={() => {
-              const activeIdx = asset.activeTakeIndex ?? 0
+              const activeIdx = activeTakeIndex
               if (confirm(`Delete take ${activeIdx + 1}?`)) {
                 if (currentProjectId && asset.takes) {
                   pushAssetUndoRef.current?.()

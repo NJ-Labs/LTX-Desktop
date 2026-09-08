@@ -234,3 +234,8 @@ class AppState:
     # Holds the generation lifecycle state before a device slot is claimed and
     # acts as the authoritative record for failures that occur before start.
     pending_generation: GenerationState | None = None
+    # The separate ComfyUI process owns device memory until its queue drains.
+    comfy_run_id: str | None = None
+    # Held until a native worker has actually stopped. Cancellation can become
+    # visible before the underlying inference call returns.
+    native_run_id: str | None = None

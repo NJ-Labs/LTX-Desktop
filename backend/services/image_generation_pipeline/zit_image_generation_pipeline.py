@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import torch
-from diffusers.pipelines.auto_pipeline import ZImagePipeline  # type: ignore[reportUnknownVariableType]
 from PIL.Image import Image as PILImage
 
 from services.services_utils import ImagePipelineOutputLike, PILImageType, get_device_type
@@ -27,8 +26,11 @@ class ZitImageGenerationPipeline:
         return ZitImageGenerationPipeline(model_path=model_path, device=device)
 
     def __init__(self, model_path: str, device: str | None = None) -> None:
+        from diffusers.pipelines.auto_pipeline import ZImagePipeline  # type: ignore[reportUnknownVariableType]
+
         self._device: str | None = None
         self._cpu_offload_active = False
+        self._img2img: Any | None = None
         self.pipeline = ZImagePipeline.from_pretrained(  # type: ignore[reportUnknownMemberType]
             model_path,
             torch_dtype=torch.bfloat16,
@@ -86,12 +88,48 @@ class ZitImageGenerationPipeline:
         )
         return self._normalize_output(output)
 
+    def _ensure_img2img_pipeline(self) -> Any:
+        if self._img2img is not None:
+            return self._img2img
+        try:
+            from diffusers import ZImageImg2ImgPipeline  # type: ignore[attr-defined]
+        except Exception as exc:
+            raise RuntimeError("DIFFUSERS_IMG2IMG_UNAVAILABLE") from exc
+
+        pipeline = cast(Any, self.pipeline)
+        self._img2img = ZImageImg2ImgPipeline(**pipeline.components)  # type: ignore[reportUnknownMemberType]
+        return self._img2img
+
+    @torch.inference_mode()
+    def edit(
+        self,
+        prompt: str,
+        image: PILImageType,
+        strength: float,
+        num_inference_steps: int,
+        seed: int,
+    ) -> ImagePipelineOutputLike:
+        pipeline = self._ensure_img2img_pipeline()
+        generator = torch.Generator(device=self._resolve_generator_device()).manual_seed(seed)
+        output = pipeline(
+            prompt=prompt,
+            image=image,
+            strength=strength,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=0.0,
+            generator=generator,
+            output_type="pil",
+            return_dict=True,
+        )
+        return self._normalize_output(output)
+
     def to(self, device: str) -> None:
         runtime_device = get_device_type(device)
-        if runtime_device in ("cuda", "mps"):
+        if runtime_device == "cuda":
             self.pipeline.enable_model_cpu_offload()  # type: ignore[reportUnknownMemberType]
             self._cpu_offload_active = True
         else:
             self._cpu_offload_active = False
             self.pipeline.to(runtime_device)  # type: ignore[reportUnknownMemberType]
         self._device = runtime_device
+        self._img2img = None

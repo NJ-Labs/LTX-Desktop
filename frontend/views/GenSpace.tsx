@@ -6,6 +6,7 @@ import {
   ChevronLeft, ChevronRight, Copy, Check, Layers, Loader2
 } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
+import { ComfyWorkflowPanel } from '../components/ComfyWorkflowPanel'
 import type { GenSpaceRetakeSource } from '../contexts/ProjectContext'
 import { useAppSettings } from '../contexts/AppSettingsContext'
 import { useGeneration } from '../hooks/use-generation'
@@ -451,6 +452,7 @@ function PromptBar({
     aspectRatio: string
     imageResolution: string
     variations: number
+    imageStrength?: number
     audio?: boolean
   }
   onSettingsChange: (settings: any) => void
@@ -552,7 +554,7 @@ function PromptBar({
       {/* Top row: Image ref | Prompt | Generate */}
       <div className="flex items-start">
         {/* Input image drop zone — video mode only (I2V) */}
-        {mode === 'video' && !isRetake && !isIcLora && (
+        {(mode === 'video' || mode === 'image') && !isRetake && !isIcLora && (
           <div
             className={`relative w-10 h-10 mx-2 mt-2 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center flex-shrink-0 cursor-pointer ${
               isDragOver ? 'border-blue-500 bg-blue-500/10' : 'border-zinc-700 hover:border-zinc-500'
@@ -725,6 +727,7 @@ function PromptBar({
           </>
         ) : mode === 'image' ? (
           <>
+            {inputImage && <label className="flex items-center gap-2 text-xs text-zinc-300"><span>Edit strength</span><input aria-label="Image edit strength" type="range" min="0.05" max="1" step="0.05" value={settings.imageStrength ?? 0.6} onChange={event => onSettingsChange({ ...settings, imageStrength: Number(event.target.value) })} className="w-20 accent-blue-500" /><span>{Math.round((settings.imageStrength ?? 0.6) * 100)}%</span></label>}
             {/* Model indicator */}
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800/50">
               <ZitIcon className="h-3.5 w-3.5" />
@@ -1033,6 +1036,7 @@ export function GenSpace() {
   const [inputAudio, setInputAudio] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
+  const [copyPromptError, setCopyPromptError] = useState('')
   const [copiedPrompt, setCopiedPrompt] = useState(false)
   const [showFavorites, setShowFavorites] = useState(false)
   const [gallerySize, setGallerySize] = useState<GallerySize>('medium')
@@ -1058,7 +1062,7 @@ export function GenSpace() {
       anchorImagePath: string | null
     }
   } | null>(null)
-  const [settings, setSettings] = useState(() => ({ ...DEFAULT_VIDEO_SETTINGS }))
+  const [settings, setSettings] = useState<typeof DEFAULT_VIDEO_SETTINGS & { imageStrength?: number }>(() => ({ ...DEFAULT_VIDEO_SETTINGS, imageStrength: 0.6 }))
   const [batchCount, setBatchCount] = useState(1)
   const [batchRemaining, setBatchRemaining] = useState(0)
   // Set when the user discards an in-flight generation so the batch loop stops
@@ -1067,7 +1071,7 @@ export function GenSpace() {
   // Confirmation gate for extremely GPU-demanding local video requests.
   const [showHeavyWarning, setShowHeavyWarning] = useState(false)
   const applyForcedVideoSettings = useCallback(
-    (next: { model: string; duration: number; videoResolution: string; fps: number; audio: boolean; aspectRatio: string; imageResolution: string; variations: number }) => {
+    (next: { model: string; duration: number; videoResolution: string; fps: number; audio: boolean; aspectRatio: string; imageResolution: string; variations: number; imageStrength?: number }) => {
       if (!shouldVideoGenerateWithLtxApi || mode !== 'video') return next
       return sanitizeForcedApiVideoSettings(next, { hasAudio: !!inputAudio })
     },
@@ -1246,7 +1250,7 @@ export function GenSpace() {
   }, [inputAudio]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Only show assets that were generated (have generationParams), not imported files
-  const assets = (currentProject?.assets || []).filter(a => a.generationParams)
+  const assets = (currentProject?.assets || []).filter(a => a.generationParams || a.bin === 'ComfyUI')
   const [lastPrompt, setLastPrompt] = useState('')
   
   // When video generation completes, add to project assets
@@ -1456,6 +1460,8 @@ export function GenSpace() {
                 cameraMotion: 'none',
                 imageAspectRatio: settings.aspectRatio,
                 imageSteps: 4,
+                inputImageUrl: inputImage || undefined,
+                imageStrength: settings.imageStrength,
               },
               takes: [{
                 url: finalUrl,
@@ -1567,7 +1573,9 @@ export function GenSpace() {
             imageAspectRatio: settings.aspectRatio,
             imageSteps: 4,
             variations: settings.variations,
-          }
+          },
+          inputImage ? fileUrlToPath(inputImage) : null,
+          settings.imageStrength,
         )
         // Stop the batch if a run failed or was cancelled
         if (!result.success) break
@@ -1750,6 +1758,7 @@ export function GenSpace() {
 
   return (
     <div className="h-full relative bg-zinc-950">
+      <details className="absolute left-4 top-4 z-30 w-[min(360px,calc(100%-2rem))] rounded-md border border-border bg-background open:max-h-[70%] open:overflow-y-auto"><summary className="cursor-pointer p-3 text-sm font-medium focus-visible:ring-2 focus-visible:ring-ring">Run a saved ComfyUI workflow</summary><div className="p-4 pt-0"><ComfyWorkflowPanel projectId={currentProjectId ?? undefined} /></div></details>
 
       {/* Empty state */}
       {isLibraryMode && assets.length === 0 && !isGenerating && (
@@ -2035,14 +2044,18 @@ export function GenSpace() {
               />
             )}
             <div className="mt-4 text-center">
+              {copyPromptError && <p role="alert" className="text-sm text-red-300">{copyPromptError}</p>}
               <div className="inline-flex items-start gap-2 max-w-full">
                 <p className="text-zinc-300">{selectedAsset.prompt}</p>
                 {selectedAsset.prompt && (
                   <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(selectedAsset.prompt)
-                      setCopiedPrompt(true)
-                      setTimeout(() => setCopiedPrompt(false), 2000)
+                    onClick={async () => {
+                      setCopyPromptError(''); setCopiedPrompt(false)
+                      try {
+                        await navigator.clipboard.writeText(selectedAsset.prompt)
+                        setCopiedPrompt(true)
+                        setTimeout(() => setCopiedPrompt(false), 2000)
+                      } catch { setCopyPromptError('Could not copy the prompt. Select the text and copy it manually.') }
                     }}
                     className="shrink-0 p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
                     title="Copy prompt"

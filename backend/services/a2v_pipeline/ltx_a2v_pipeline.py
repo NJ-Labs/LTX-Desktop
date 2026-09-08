@@ -8,7 +8,13 @@ from typing import cast
 import torch
 
 from api_types import ImageConditioningInput
-from services.ltx_pipeline_common import default_tiling_config, encode_video_output, video_chunks_number
+from services.ltx_pipeline_common import (
+    default_tiling_config,
+    encode_video_output,
+    get_quantization_policy_class,
+    guiding_image_conditionings,
+    video_chunks_number,
+)
 from services.services_utils import AudioOrNone, TilingConfigType, device_supports_fp8
 
 
@@ -34,10 +40,9 @@ class LTXa2vPipeline:
         upsampler_path: str,
         device: torch.device,
     ) -> None:
-        from ltx_core.quantization import QuantizationPolicy
-
         from services.a2v_pipeline.distilled_a2v_pipeline import DistilledA2VPipeline
 
+        QuantizationPolicy = get_quantization_policy_class()
         self.pipeline = DistilledA2VPipeline(
             distilled_checkpoint_path=checkpoint_path,
             gemma_root=cast(str, gemma_root),
@@ -62,19 +67,20 @@ class LTXa2vPipeline:
         audio_max_duration: float | None,
         tiling_config: TilingConfigType,
     ) -> tuple[torch.Tensor | Iterator[torch.Tensor], AudioOrNone]:
-        return self.pipeline(
-            prompt=prompt,
-            seed=seed,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            frame_rate=frame_rate,
-            images=[(img.path, img.frame_idx, img.strength) for img in images],
-            audio_path=audio_path,
-            audio_start_time=audio_start_time,
-            audio_max_duration=audio_max_duration,
-            tiling_config=tiling_config,
-        )
+        with guiding_image_conditionings(images):
+            return self.pipeline(
+                prompt=prompt,
+                seed=seed,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                frame_rate=frame_rate,
+                images=[(img.path, img.frame_idx, img.strength) for img in images],
+                audio_path=audio_path,
+                audio_start_time=audio_start_time,
+                audio_max_duration=audio_max_duration,
+                tiling_config=tiling_config,
+            )
 
     @torch.inference_mode()
     def generate(

@@ -108,6 +108,88 @@ class TestGenerate:
         assert r.status_code == 400
         assert "Invalid image file" in r.json()["error"]
 
+    def test_native_video_forwards_start_and_end_image_conditioning(
+        self,
+        client,
+        test_state,
+        fake_services,
+        create_fake_model_files,
+        make_test_image,
+        tmp_path,
+    ):
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+        start_path = tmp_path / "start.png"
+        end_path = tmp_path / "end.png"
+        start_path.write_bytes(make_test_image().getvalue())
+        end_path.write_bytes(make_test_image().getvalue())
+
+        response = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "imageConditionings": [
+                    {"path": str(start_path), "frame_idx": 0, "strength": 1.0},
+                    {"path": str(end_path), "frame_idx": -1, "strength": 0.8},
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        images = fake_services.fast_video_pipeline.generate_calls[0]["images"]
+        assert [(image.frame_idx, image.strength) for image in images] == [(0, 1.0), (48, 0.8)]
+        assert all(not Path(image.path).exists() for image in images)
+
+    def test_native_video_rejects_duplicate_conditioning_frame(
+        self,
+        client,
+        test_state,
+        create_fake_model_files,
+        make_test_image,
+        tmp_path,
+    ):
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+        image_path = tmp_path / "frame.png"
+        image_path.write_bytes(make_test_image().getvalue())
+
+        response = client.post(
+            "/api/generate",
+            json={
+                **_T2V_JSON,
+                "imageConditionings": [
+                    {"path": str(image_path), "frame_idx": 0, "strength": 1.0},
+                    {"path": str(image_path), "frame_idx": 0, "strength": 0.5},
+                ],
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"] == "Multiple image conditionings target frame 0"
+
+    def test_forced_api_rejects_end_frame_conditioning(self, client, test_state, make_test_image, tmp_path):
+        test_state.config.force_api_generations = True
+        test_state.state.app_settings.ltx_api_key = "api-key"
+        image_path = tmp_path / "end.png"
+        image_path.write_bytes(make_test_image().getvalue())
+
+        response = client.post(
+            "/api/generate",
+            json={
+                "prompt": "test",
+                "resolution": "1080p",
+                "model": "fast",
+                "duration": "6",
+                "fps": "24",
+                "imageConditionings": [
+                    {"path": str(image_path), "frame_idx": -1, "strength": 1.0},
+                ],
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"] == "UNSUPPORTED_FORCED_API_IMAGE_CONDITIONING"
+
     def test_resolution_mapping_540p(self, client, test_state, fake_services, create_fake_model_files):
         create_fake_model_files()
         _enable_local_text_encoding(test_state)
@@ -1119,6 +1201,61 @@ class TestGenerateImage:
         assert call["width"] == 1008
         assert call["height"] == 1008
 
+    def test_image_edit_uses_source_strength_and_requested_size(
+        self,
+        client,
+        fake_services,
+        create_fake_model_files,
+        make_test_image,
+        tmp_path,
+    ):
+        create_fake_model_files(include_zit=True)
+        source_path = tmp_path / "source.png"
+        source_path.write_bytes(make_test_image(w=320, h=180).getvalue())
+
+        response = client.post(
+            "/api/generate-image",
+            json={
+                "prompt": "turn the sky green",
+                "width": 640,
+                "height": 480,
+                "numSteps": 8,
+                "imagePath": str(source_path),
+                "strength": 0.75,
+            },
+        )
+
+        assert response.status_code == 200
+        assert fake_services.image_generation_pipeline.generate_calls == []
+        call = fake_services.image_generation_pipeline.edit_calls[0]
+        assert call["image"].size == (640, 480)
+        assert call["strength"] == 0.75
+        assert call["num_inference_steps"] == 8
+
+    def test_image_edit_rejects_strength_that_runs_zero_steps(
+        self,
+        client,
+        create_fake_model_files,
+        make_test_image,
+        tmp_path,
+    ):
+        create_fake_model_files(include_zit=True)
+        source_path = tmp_path / "source.png"
+        source_path.write_bytes(make_test_image().getvalue())
+
+        response = client.post(
+            "/api/generate-image",
+            json={
+                "prompt": "edit",
+                "numSteps": 4,
+                "imagePath": str(source_path),
+                "strength": 0.1,
+            },
+        )
+
+        assert response.status_code == 400
+        assert "at least one denoising step" in response.json()["error"]
+
     def test_num_images_clamped(self, client, fake_services, create_fake_model_files):
         create_fake_model_files(include_zit=True)
         r = client.post(
@@ -1172,6 +1309,26 @@ class TestForcedApiGenerateImage:
 
         assert r.status_code == 500
         assert r.json()["error"] == "FAL_API_KEY_NOT_CONFIGURED"
+
+    def test_image_edit_is_rejected_in_forced_api_mode(
+        self,
+        client,
+        test_state,
+        make_test_image,
+        tmp_path,
+    ):
+        test_state.config.force_api_generations = True
+        test_state.state.app_settings.fal_api_key = "fal-key"
+        source_path = tmp_path / "source.png"
+        source_path.write_bytes(make_test_image().getvalue())
+
+        response = client.post(
+            "/api/generate-image",
+            json={"prompt": "edit", "imagePath": str(source_path), "strength": 0.6},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"] == "FAL_IMAGE_EDIT_UNSUPPORTED"
 
     def test_generate_image_cancelled(self, client, test_state, fake_services):
         test_state.config.force_api_generations = True

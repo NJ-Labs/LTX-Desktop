@@ -39,6 +39,7 @@ export interface MenuDepsParams {
   splitClipAtPlayhead: (id: string, atTime?: number, batchClipIds?: string[]) => void
   duplicateClip: (id: string) => void
   pushUndo: () => void
+  pushTrackUndo: () => void
   setClips: React.Dispatch<React.SetStateAction<TimelineClip[]>>
   updateClip: (id: string, patch: Partial<TimelineClip>) => void
   setTracks: React.Dispatch<React.SetStateAction<any[]>>
@@ -60,6 +61,15 @@ export interface MenuDepsParams {
 }
 
 export function buildMenuDefinitions(p: MenuDepsParams): MenuDefinition[] {
+  const linkCandidates = p.selectedClip && (p.selectedClip.type === 'video' || p.selectedClip.type === 'audio')
+    ? p.clips.filter(c => c.type === (p.selectedClip!.type === 'video' ? 'audio' : 'video') &&
+        !c.linkedClipIds?.length && c.assetId === p.selectedClip!.assetId &&
+        Math.abs(c.startTime - p.selectedClip!.startTime) < 0.05)
+    : []
+  const setSpeed = (speed: number) => {
+    if (!p.selectedClip) return
+    p.updateClip(p.selectedClip.id, { speed, duration: p.selectedClip.duration * p.selectedClip.speed / speed })
+  }
   return [
     // ── File ──
     // Import/export, timeline management, project settings
@@ -120,7 +130,7 @@ export function buildMenuDefinitions(p: MenuDepsParams): MenuDefinition[] {
         { id: 'sep-2', label: '', separator: true },
         { id: 'mute', label: p.selectedClip?.muted ? 'Unmute Clip' : 'Mute Clip', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { muted: !p.selectedClip.muted }) }, disabled: !p.selectedClip },
         { id: 'link-audio', label: p.selectedClip?.linkedClipIds?.length ? 'Unlink Audio' : 'Link Audio', action: () => {
-          if (!p.selectedClip) return
+          if (!p.selectedClip || (!p.selectedClip.linkedClipIds?.length && !linkCandidates.length)) return
           p.pushUndo()
           if (p.selectedClip.linkedClipIds?.length) {
             const linkedIds = p.selectedClip.linkedClipIds
@@ -129,15 +139,22 @@ export function buildMenuDefinitions(p: MenuDepsParams): MenuDefinition[] {
               if (linkedIds.includes(c.id)) return { ...c, linkedClipIds: c.linkedClipIds?.filter(lid => lid !== p.selectedClip!.id) }
               return c
             }))
+          } else {
+            const candidateIds = linkCandidates.map(c => c.id)
+            p.setClips(prev => prev.map(c => {
+              if (c.id === p.selectedClip!.id) return { ...c, linkedClipIds: candidateIds }
+              if (candidateIds.includes(c.id)) return { ...c, linkedClipIds: [p.selectedClip!.id] }
+              return c
+            }))
           }
-        }, disabled: !p.selectedClip },
+        }, disabled: !p.selectedClip || (!p.selectedClip.linkedClipIds?.length && !linkCandidates.length) },
         { id: 'sep-3', label: '', separator: true },
-        { id: 'speed-025', label: 'Speed: 0.25x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 0.25 }) }, disabled: !p.selectedClip },
-        { id: 'speed-050', label: 'Speed: 0.5x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 0.5 }) }, disabled: !p.selectedClip },
-        { id: 'speed-100', label: 'Speed: 1x (Normal)', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 1 }) }, disabled: !p.selectedClip },
-        { id: 'speed-150', label: 'Speed: 1.5x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 1.5 }) }, disabled: !p.selectedClip },
-        { id: 'speed-200', label: 'Speed: 2x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 2 }) }, disabled: !p.selectedClip },
-        { id: 'speed-400', label: 'Speed: 4x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 4 }) }, disabled: !p.selectedClip },
+        { id: 'speed-025', label: 'Speed: 0.25x', action: () => setSpeed(0.25), disabled: !p.selectedClip },
+        { id: 'speed-050', label: 'Speed: 0.5x', action: () => setSpeed(0.5), disabled: !p.selectedClip },
+        { id: 'speed-100', label: 'Speed: 1x (Normal)', action: () => setSpeed(1), disabled: !p.selectedClip },
+        { id: 'speed-150', label: 'Speed: 1.5x', action: () => setSpeed(1.5), disabled: !p.selectedClip },
+        { id: 'speed-200', label: 'Speed: 2x', action: () => setSpeed(2), disabled: !p.selectedClip },
+        { id: 'speed-400', label: 'Speed: 4x', action: () => setSpeed(4), disabled: !p.selectedClip },
       ],
     },
 
@@ -147,8 +164,8 @@ export function buildMenuDefinitions(p: MenuDepsParams): MenuDefinition[] {
       id: 'sequence',
       label: 'Sequence',
       items: [
-        { id: 'add-video-track', label: 'Add Video Track', action: () => { p.pushUndo(); p.setTracks(prev => { const vTracks = prev.filter((t: any) => t.kind === 'video'); const name = `V${vTracks.length + 1}`; return [...prev, { id: `track-${Date.now()}`, name, muted: false, locked: false, kind: 'video' as const }] }) } },
-        { id: 'add-audio-track', label: 'Add Audio Track', action: () => { p.pushUndo(); p.setTracks(prev => { const aTracks = prev.filter((t: any) => t.kind === 'audio'); const name = `A${aTracks.length + 1}`; return [...prev, { id: `track-${Date.now()}`, name, muted: false, locked: false, kind: 'audio' as const }] }) } },
+        { id: 'add-video-track', label: 'Add Video Track', action: () => { p.pushTrackUndo(); p.setTracks(prev => { const vTracks = prev.filter((t: any) => t.kind === 'video'); const name = `V${vTracks.length + 1}`; return [...prev, { id: `track-${Date.now()}`, name, muted: false, locked: false, kind: 'video' as const }] }) } },
+        { id: 'add-audio-track', label: 'Add Audio Track', action: () => { p.pushTrackUndo(); p.setTracks(prev => { const aTracks = prev.filter((t: any) => t.kind === 'audio'); const name = `A${aTracks.length + 1}`; return [...prev, { id: `track-${Date.now()}`, name, muted: false, locked: false, kind: 'audio' as const }] }) } },
         { id: 'add-subtitle-track', label: 'Add Subtitle Track', action: () => p.addSubtitleTrack() },
         { id: 'sep-1', label: '', separator: true },
         { id: 'add-adjustment', label: 'Add Adjustment Layer', action: () => p.createAdjustmentLayerAsset() },

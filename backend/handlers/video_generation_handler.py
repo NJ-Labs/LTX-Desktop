@@ -36,6 +36,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+PreparedImageConditioning = tuple[Image.Image, int, float]
+
 FORCED_API_MODEL_MAP: dict[str, str] = {
     "fast": "ltx-2-3-fast",
     "pro": "ltx-2-3-pro",
@@ -90,10 +92,14 @@ class VideoGenerationHandler(StateHandlerBase):
         if not self._generation.try_reserve_generation(generation_id):
             raise HTTPError(409, "Generation already in progress")
 
-        self._task_runner.run_background(
-            lambda: self._run_generation(req),
-            task_name="video-generation",
-        )
+        try:
+            self._task_runner.run_background(
+                lambda: self._run_generation(req, generation_id),
+                task_name="video-generation",
+            )
+        except Exception:
+            self._generation.release_generation(generation_id)
+            raise
 
         kind, payload, status_code = self._generation.get_async_outcome()
         if kind == "complete":
@@ -104,13 +110,15 @@ class VideoGenerationHandler(StateHandlerBase):
             raise HTTPError(status_code, str(payload) if payload else "Generation failed")
         return GenerateVideoResponse(status="started")
 
-    def _run_generation(self, req: GenerateVideoRequest) -> None:
+    def _run_generation(self, req: GenerateVideoRequest, generation_id: str) -> None:
         try:
             self.generate(req)
         except HTTPError as exc:
             self._generation.fail_generation(normalize_generation_error(exc.detail), status_code=exc.status_code)
         except Exception as exc:  # noqa: BLE001 - surface failure to async pollers
             self._generation.fail_generation(normalize_generation_error(exc))
+        finally:
+            self._generation.release_generation(generation_id)
 
     def generate(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
         if should_video_generate_with_ltx_api(
@@ -168,11 +176,7 @@ class VideoGenerationHandler(StateHandlerBase):
 
         num_frames = self._compute_num_frames(duration, fps)
 
-        image = None
-        image_path = normalize_optional_path(req.imagePath)
-        if image_path:
-            image = self._prepare_image(image_path, width, height)
-            logger.info("Image: %s -> %sx%s", image_path, width, height)
+        conditioned_images = self._prepare_image_conditionings(req, width, height, num_frames)
 
         generation_id = self._make_generation_id()
         seed = self._resolve_seed()
@@ -183,7 +187,7 @@ class VideoGenerationHandler(StateHandlerBase):
 
             output_path = self.generate_video(
                 prompt=req.prompt,
-                image=image,
+                conditioned_images=conditioned_images,
                 height=height,
                 width=width,
                 num_frames=num_frames,
@@ -208,7 +212,7 @@ class VideoGenerationHandler(StateHandlerBase):
     def generate_video(
         self,
         prompt: str,
-        image: Image.Image | None,
+        conditioned_images: list[PreparedImageConditioning],
         height: int,
         width: int,
         num_frames: int,
@@ -219,7 +223,7 @@ class VideoGenerationHandler(StateHandlerBase):
         model_type: VideoPipelineModelType = "fast",
     ) -> str:
         t_total_start = time.perf_counter()
-        gen_mode = "i2v" if image is not None else "t2v"
+        gen_mode = "i2v" if conditioned_images else "t2v"
         logger.info("[%s] Generation started (model=%s, %dx%d, %d frames, %d fps)", gen_mode, model_type, width, height, num_frames, int(fps))
 
         if self._generation.is_generation_cancelled():
@@ -248,18 +252,19 @@ class VideoGenerationHandler(StateHandlerBase):
         enhanced_prompt = prompt + self.config.camera_motion_prompts.get(camera_motion, "")
 
         images: list[ImageConditioningInput] = []
-        temp_image_path: str | None = None
-        if image is not None:
+        temp_image_paths: list[str] = []
+        for image, frame_idx, strength in conditioned_images:
             temp_image_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
             image.save(temp_image_path)
-            images = [ImageConditioningInput(path=temp_image_path, frame_idx=0, strength=1.0)]
+            temp_image_paths.append(temp_image_path)
+            images.append(ImageConditioningInput(path=temp_image_path, frame_idx=frame_idx, strength=strength))
 
         output_path = self._make_output_path()
 
         try:
             settings = self.state.app_settings
             use_api_encoding = not self._text.should_use_local_encoding()
-            if image is not None:
+            if conditioned_images:
                 enhance = use_api_encoding and settings.prompt_enhancer_enabled_i2v
             else:
                 enhance = use_api_encoding and settings.prompt_enhancer_enabled_t2v
@@ -313,8 +318,9 @@ class VideoGenerationHandler(StateHandlerBase):
             return str(output_path)
         finally:
             self._text.clear_api_embeddings()
-            if temp_image_path and os.path.exists(temp_image_path):
-                os.unlink(temp_image_path)
+            for temp_image_path in temp_image_paths:
+                if os.path.exists(temp_image_path):
+                    os.unlink(temp_image_path)
 
     def _generate_a2v(
         self, req: GenerateVideoRequest, duration: int, fps: int, *, audio_path: str
@@ -335,11 +341,8 @@ class VideoGenerationHandler(StateHandlerBase):
 
         num_frames = self._compute_num_frames(duration, fps)
 
-        image = None
-        temp_image_path: str | None = None
-        image_path = normalize_optional_path(req.imagePath)
-        if image_path:
-            image = self._prepare_image(image_path, width, height)
+        conditioned_images = self._prepare_image_conditionings(req, width, height, num_frames)
+        temp_image_paths: list[str] = []
 
         seed = self._resolve_seed()
 
@@ -353,10 +356,11 @@ class VideoGenerationHandler(StateHandlerBase):
             neg = req.negativePrompt if req.negativePrompt else self.config.default_negative_prompt
 
             images: list[ImageConditioningInput] = []
-            if image is not None:
+            for image, frame_idx, strength in conditioned_images:
                 temp_image_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
                 image.save(temp_image_path)
-                images = [ImageConditioningInput(path=temp_image_path, frame_idx=0, strength=1.0)]
+                temp_image_paths.append(temp_image_path)
+                images.append(ImageConditioningInput(path=temp_image_path, frame_idx=frame_idx, strength=strength))
 
             output_path = self._make_output_path()
 
@@ -364,7 +368,7 @@ class VideoGenerationHandler(StateHandlerBase):
 
             a2v_settings = self.state.app_settings
             a2v_use_api = not self._text.should_use_local_encoding()
-            if image is not None:
+            if conditioned_images:
                 a2v_enhance = a2v_use_api and a2v_settings.prompt_enhancer_enabled_i2v
             else:
                 a2v_enhance = a2v_use_api and a2v_settings.prompt_enhancer_enabled_t2v
@@ -408,8 +412,47 @@ class VideoGenerationHandler(StateHandlerBase):
             raise HTTPError(500, str(e)) from e
         finally:
             self._text.clear_api_embeddings()
-            if temp_image_path and os.path.exists(temp_image_path):
-                os.unlink(temp_image_path)
+            for temp_image_path in temp_image_paths:
+                if os.path.exists(temp_image_path):
+                    os.unlink(temp_image_path)
+
+    def _prepare_image_conditionings(
+        self,
+        req: GenerateVideoRequest,
+        width: int,
+        height: int,
+        num_frames: int,
+    ) -> list[PreparedImageConditioning]:
+        requested = req.imageConditionings
+        if not requested:
+            legacy_path = normalize_optional_path(req.imagePath)
+            if legacy_path is None:
+                return []
+            requested = [ImageConditioningInput(path=legacy_path, frame_idx=0, strength=1.0)]
+
+        prepared: list[PreparedImageConditioning] = []
+        occupied_frames: set[int] = set()
+        for item in requested:
+            image_path = normalize_optional_path(item.path)
+            if image_path is None:
+                raise HTTPError(400, "Image conditioning path cannot be empty")
+
+            frame_idx = num_frames - 1 if item.frame_idx == -1 else item.frame_idx
+            if frame_idx < 0 or frame_idx >= num_frames:
+                raise HTTPError(
+                    400,
+                    f"Image conditioning frame {item.frame_idx} is outside the generated clip (0-{num_frames - 1})",
+                )
+            if frame_idx in occupied_frames:
+                raise HTTPError(400, f"Multiple image conditionings target frame {frame_idx}")
+            if not 0.0 <= item.strength <= 1.0:
+                raise HTTPError(400, "Image conditioning strength must be between 0 and 1")
+
+            prepared.append((self._prepare_image(image_path, width, height), frame_idx, item.strength))
+            occupied_frames.add(frame_idx)
+            logger.info("Image conditioning: %s at frame %d -> %sx%s", image_path, frame_idx, width, height)
+
+        return prepared
 
     def _prepare_image(self, image_path: str, width: int, height: int) -> Image.Image:
         validated_path = validate_image_file(image_path)
@@ -457,11 +500,20 @@ class VideoGenerationHandler(StateHandlerBase):
 
         audio_path = normalize_optional_path(req.audioPath)
         image_path = normalize_optional_path(req.imagePath)
-        has_input_audio = bool(audio_path)
-        has_input_image = bool(image_path)
         ltx_api_base_url = self.state.app_settings.ltx_api_base_url
 
         try:
+            if req.imageConditionings:
+                if (
+                    len(req.imageConditionings) != 1
+                    or req.imageConditionings[0].frame_idx != 0
+                    or req.imageConditionings[0].strength != 1.0
+                ):
+                    raise HTTPError(400, "UNSUPPORTED_FORCED_API_IMAGE_CONDITIONING")
+                image_path = normalize_optional_path(req.imageConditionings[0].path)
+            has_input_audio = bool(audio_path)
+            has_input_image = bool(image_path)
+
             self._generation.update_progress("validating_request", 5, None, None)
 
             api_key = self.state.app_settings.ltx_api_key.strip()

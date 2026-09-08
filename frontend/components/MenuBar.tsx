@@ -153,7 +153,15 @@ export function MenuBar({ menus, rightContent }: MenuBarProps) {
   }
 
   return (
-    <div ref={menuBarRef} className="flex items-center bg-zinc-900 border-b border-zinc-800 select-none relative z-[60]">
+    <div ref={menuBarRef} onKeyDown={e => {
+      // Menu navigation must not trigger timeline shortcuts behind the menu.
+      e.stopPropagation()
+      if (e.key === 'Escape') {
+        setOpenMenuId(null)
+        setHoverMenuId(null)
+        setSearchQuery('')
+      }
+    }} className="flex items-center bg-zinc-900 border-b border-zinc-800 select-none relative z-[60]">
       <div className="flex items-center flex-1">
       {menus.map(menu => {
         const isActive = activeMenuId === menu.id
@@ -162,8 +170,9 @@ export function MenuBar({ menus, rightContent }: MenuBarProps) {
         return (
           <div key={menu.id} className="relative">
             <button
-              onMouseDown={() => {
-                if (openMenuId === menu.id) {
+              aria-expanded={isActive}
+              onClick={() => {
+                if (activeMenuId === menu.id) {
                   setOpenMenuId(null)
                   setHoverMenuId(null)
                 } else {
@@ -215,6 +224,7 @@ export function MenuBar({ menus, rightContent }: MenuBarProps) {
                             <button
                               key={`${result.item.id}-${i}`}
                               onClick={() => handleSearchResultClick(result.item)}
+                              disabled={result.item.disabled || !result.item.action}
                               className={`w-full flex items-center justify-between px-2 py-1.5 text-left text-[12px] rounded transition-colors ${
                                 i === highlightedResult
                                   ? 'bg-blue-600 text-white'

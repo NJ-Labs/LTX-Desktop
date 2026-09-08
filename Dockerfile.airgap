@@ -26,8 +26,7 @@ ENV PYTHONUNBUFFERED=1 \
     UV_CACHE_DIR=/root/.cache/uv \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
-    UV_NATIVE_TLS=1 \
-    UV_INSECURE_HOST="download.pytorch.org download-r2.pytorch.org pypi.org files.pythonhosted.org" \
+    UV_SYSTEM_CERTS=true \
     CC=gcc \
     PATH="/app/backend/.venv/bin:${PATH}"
 
@@ -51,18 +50,23 @@ WORKDIR /app/backend
 COPY backend/pyproject.toml backend/uv.lock ./
 
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
-    GIT_SSL_NO_VERIFY=1 uv sync --frozen --no-dev --no-install-project
+    uv sync --frozen --no-dev --no-install-project
 
 COPY backend ./
 COPY ComfyUI /app/ComfyUI
+COPY ComfyUI-LTXVideo /app/ComfyUI/custom_nodes/ComfyUI-LTXVideo
+COPY ComfyUI-LTXVideo /app/ComfyUI-LTXVideo
+COPY resources/comfyui_bridge /app/ComfyUI/custom_nodes/ltx_studio_bridge
+COPY scripts/setup-comfyui.py /app/scripts/setup-comfyui.py
 
 COPY --from=frontend-build /app/dist /app/dist
 
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
-    GIT_SSL_NO_VERIFY=1 uv sync --frozen --no-dev
+    uv sync --frozen --no-dev
 
+ARG COMFY_TORCH_BACKEND=cu128
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-cache \
-    GIT_SSL_NO_VERIFY=1 uv pip install -r /app/ComfyUI/requirements.txt
+    python /app/scripts/setup-comfyui.py --torch-backend ${COMFY_TORCH_BACKEND}
 
 COPY scripts/airgap-entrypoint.sh /usr/local/bin/airgap-entrypoint.sh
 

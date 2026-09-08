@@ -52,6 +52,19 @@ def test_cancel_marks_running_generation(test_state):
     assert out.id == "gen-1"
 
 
+def test_cancelled_worker_keeps_native_lease_until_it_exits(test_state):
+    test_state.pipelines.load_gpu_pipeline("fast")
+    assert test_state.generation.try_reserve_generation("gen-1") is True
+    test_state.generation.start_generation("gen-1")
+
+    test_state.generation.cancel_generation()
+
+    assert test_state.generation.try_reserve_generation("gen-2") is False
+    test_state.generation.release_generation("gen-1")
+    assert test_state.generation.try_reserve_generation("gen-2") is True
+    test_state.generation.release_generation("gen-2")
+
+
 def test_zit_slot_invariant_enforced(test_state, fake_services):
     zit = fake_services.image_generation_pipeline
     test_state.state.gpu_slot = GpuSlot(active_pipeline=zit, generation=None)
@@ -149,6 +162,16 @@ def test_warmup_marks_pipeline_warm_and_leaves_no_temp_artifact(test_state):
 
     assert out.warmth.value == "warm"
     assert not expected_path.exists()
+    assert test_state.state.native_run_id is None
+
+
+def test_warmup_rejects_active_native_lease(test_state):
+    assert test_state.generation.try_reserve_generation("gen-1") is True
+
+    with pytest.raises(RuntimeError, match="GPU is busy"):
+        test_state.pipelines.warmup_pipeline("fast")
+
+    test_state.generation.release_generation("gen-1")
 
 
 def test_mps_skips_torch_compile(test_state, fake_services):
@@ -210,6 +233,30 @@ def test_manual_preload_rejects_when_already_loading(test_state):
 
     assert started is False
     assert isinstance(test_state.state.startup, StartupLoading)
+
+
+def test_manual_preload_rejects_native_lease_without_changing_readiness(test_state):
+    test_state.state.startup = StartupReady()
+    assert test_state.generation.try_reserve_generation("gen-1") is True
+
+    started = test_state.health.start_manual_preload()
+
+    assert started is False
+    assert isinstance(test_state.state.startup, StartupReady)
+    test_state.generation.release_generation("gen-1")
+
+
+def test_compile_change_does_not_invalidate_reserved_pipeline(test_state):
+    original = test_state.pipelines.load_gpu_pipeline("fast")
+    assert test_state.generation.try_reserve_generation("gen-1") is True
+    test_state.state.app_settings.use_torch_compile = True
+
+    dropped = test_state.pipelines.invalidate_video_pipeline_for_compile_change()
+
+    assert dropped is False
+    assert isinstance(test_state.state.gpu_slot, GpuSlot)
+    assert test_state.state.gpu_slot.active_pipeline is original
+    test_state.generation.release_generation("gen-1")
 
 
 def test_forced_mode_warmup_skips_fast_pipeline(test_state):

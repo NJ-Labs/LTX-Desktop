@@ -252,16 +252,26 @@ export function useClipOperations(params: UseClipOperationsParams) {
   const duplicateClip = (clipId: string) => {
     const clip = clips.find(c => c.id === clipId)
     if (!clip) return
-    pushUndo()
-    
-    const newClip: TimelineClip = {
-      ...clip,
-      id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      startTime: clip.startTime + clip.duration,
+    const groupIds = new Set([clipId])
+    const queue = [clipId]
+    while (queue.length) {
+      const current = clips.find(c => c.id === queue.pop())
+      for (const linkedId of current?.linkedClipIds ?? []) {
+        if (!groupIds.has(linkedId)) { groupIds.add(linkedId); queue.push(linkedId) }
+      }
     }
-    setClips([...clips, newClip])
+    const group = clips.filter(c => groupIds.has(c.id))
+    const ids = new Map(group.map(c => [c.id, 'clip-' + crypto.randomUUID()]))
+    const copies = group.map(c => ({
+      ...c,
+      id: ids.get(c.id)!,
+      startTime: c.startTime + clip.duration,
+      linkedClipIds: c.linkedClipIds?.flatMap(linkedId => ids.has(linkedId) ? [ids.get(linkedId)!] : []),
+    }))
+    pushUndo()
+    setClips([...clips, ...copies])
   }
-  
+
   const splitClipAtPlayhead = (clipId: string, atTime?: number, batchClipIds?: string[]) => {
     // Determine which clips to split: either a single clip or a batch
     const idsToSplit = batchClipIds || [clipId]

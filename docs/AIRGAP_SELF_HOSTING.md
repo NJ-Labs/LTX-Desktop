@@ -56,6 +56,7 @@ The `--data-dir` flag selects a single host folder where all user data is read f
 - **Playground assets** — videos generated outside of a project.
 - **Generated videos and images** — written under `outputs/`.
 - **Settings** — `settings.json`.
+- **ComfyUI workflows and run records** — `comfyui-library/`; editor settings under `.comfyui-user/` and saved media under `comfyui-output/`.
 
 Notes:
 
@@ -95,3 +96,7 @@ Depending on your settings and flows, you may also need:
 - `LTX_REQUIRE_LOCAL_MODE=0` is enabled by default in the entrypoint.
 
 If required models are missing, the backend still starts and the frontend can surface a warning dialog and a non-green model status badge. Set `LTX_REQUIRE_LOCAL_MODE=1` if you want strict fail-fast behavior instead.
+
+## ComfyUI workflows
+
+The image includes the ComfyUI editor, LTX custom nodes and Studio workflow bridge. ComfyUI uses a separate Python environment so its dependencies do not replace the native LTX stack. See [ComfyUI integration](COMFYUI_INTEGRATION.md) for publishing workflows, storage, authentication, GPU handoff, offline preparation and deployment verification.

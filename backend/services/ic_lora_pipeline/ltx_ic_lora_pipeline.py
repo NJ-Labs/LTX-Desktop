@@ -8,7 +8,12 @@ from typing import cast
 import torch
 
 from api_types import ImageConditioningInput
-from services.ltx_pipeline_common import default_tiling_config, encode_video_output, video_chunks_number
+from services.ltx_pipeline_common import (
+    default_tiling_config,
+    encode_video_output,
+    get_quantization_policy_class,
+    video_chunks_number,
+)
 from services.services_utils import AudioOrNone, TilingConfigType, device_supports_fp8
 
 
@@ -42,9 +47,9 @@ class LTXIcLoraPipeline:
     ) -> None:
         from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
         from ltx_core.loader.sd_ops import LTXV_LORA_COMFY_RENAMING_MAP
-        from ltx_core.quantization import QuantizationPolicy
         from ltx_pipelines.ic_lora import ICLoraPipeline
 
+        QuantizationPolicy = get_quantization_policy_class()
         lora_entry = LoraPathStrengthAndSDOps(
             path=lora_path,
             strength=lora_strength,

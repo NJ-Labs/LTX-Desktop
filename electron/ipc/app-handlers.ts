@@ -111,6 +111,8 @@ export function registerAppHandlers(): void {
   })
 
   ipcMain.handle('fetch-license-text', async () => {
+    const bundled = path.join(app.getAppPath(), 'resources', 'LTX-2.3-LICENSE.txt')
+    if (fs.existsSync(bundled)) return fs.readFileSync(bundled, 'utf-8')
     const resp = await fetch('https://huggingface.co/Lightricks/LTX-2.3/raw/main/LICENSE')
     if (!resp.ok) {
       throw new Error(`Failed to fetch license (HTTP ${resp.status})`)

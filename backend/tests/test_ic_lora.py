@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import time
 
 from runtime_config.model_download_specs import resolve_model_path
 from tests.fakes import FakeCapture
@@ -120,6 +122,20 @@ class TestIcLoraExtractConditioning:
         assert response.json()["conditioning_type"] == "depth"
         assert fake_services.depth_processor_pipeline.apply_calls == ["frame-a"]
 
+    def test_depth_extraction_rejects_comfy_gpu_lease(self, client, test_state):
+        video_path = test_state.config.outputs_dir / "depth_busy.mp4"
+        video_path.write_bytes(b"fake")
+        test_state.video_processor.register_video(str(video_path), FakeCapture(frames=["frame-a"]))
+        assert test_state.generation.try_reserve_comfy("comfy-1") is True
+
+        response = client.post(
+            "/api/ic-lora/extract-conditioning",
+            json={"video_path": str(video_path), "conditioning_type": "depth", "frame_time": 0},
+        )
+
+        assert response.status_code == 409
+        test_state.generation.release_comfy("comfy-1")
+
     def test_pose_extraction(self, client, test_state, fake_services):
         video_path = test_state.config.outputs_dir / "pose_video.mp4"
         video_path.write_bytes(b"\x00" * 100)
@@ -157,6 +173,45 @@ class TestIcLoraExtractConditioning:
 
 
 class TestIcLoraGenerate:
+    def test_concurrent_requests_reserve_before_pipeline_load(
+        self,
+        client,
+        test_state,
+        fake_services,
+    ):
+        video_path = test_state.config.outputs_dir / "concurrent_input.mp4"
+        video_path.write_bytes(b"\x00" * 100)
+        _create_ic_lora_resources(test_state)
+
+        text_encoder_dir = _model_path(test_state, "text_encoder")
+        text_encoder_dir.mkdir(parents=True, exist_ok=True)
+        (text_encoder_dir / "model.safetensors").write_bytes(b"\x00" * 100)
+        test_state.state.app_settings.use_local_text_encoder = True
+
+        test_state.video_processor.register_video(
+            str(video_path),
+            FakeCapture(frames=["f1", "f2"], fps=24, width=64, height=64),
+        )
+        pipeline = fake_services.ic_lora_pipeline
+        pipeline.block_create = True
+        payload = {
+            "video_path": str(video_path),
+            "prompt": "test prompt",
+            "conditioning_type": "canny",
+            "seed": 42,
+        }
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(client.post, "/api/ic-lora/generate", json=payload)
+            assert pipeline.create_entered.wait(timeout=2)
+            second = pool.submit(client.post, "/api/ic-lora/generate", json=payload)
+            time.sleep(0.1)
+            pipeline.allow_create.set()
+            responses = [first.result(timeout=5), second.result(timeout=5)]
+
+        assert sorted(response.status_code for response in responses) == [200, 409]
+        assert len(pipeline.create_calls) == 1
+
     def test_happy_path(self, client, test_state, fake_services):
         video_path = test_state.config.outputs_dir / "input.mp4"
         video_path.write_bytes(b"\x00" * 100)
@@ -194,6 +249,10 @@ class TestIcLoraGenerate:
         anchor_path = test_state.config.outputs_dir / "face-anchor.png"
         anchor_path.write_bytes(b"fake-anchor")
         _create_ic_lora_resources(test_state, include_depth=False, adapter_type="ingredients")
+        te_dir = _model_path(test_state, "text_encoder")
+        te_dir.mkdir(parents=True, exist_ok=True)
+        (te_dir / "model.safetensors").write_bytes(b"fake")
+        test_state.state.app_settings.use_local_text_encoder = True
 
         response = client.post(
             "/api/ic-lora/generate",
@@ -231,6 +290,10 @@ class TestIcLoraGenerate:
         video_path = test_state.config.outputs_dir / "pose-input.mp4"
         video_path.write_bytes(b"\x00" * 100)
         _create_ic_lora_resources(test_state, include_depth=False, include_pose=True)
+        te_dir = _model_path(test_state, "text_encoder")
+        te_dir.mkdir(parents=True, exist_ok=True)
+        (te_dir / "model.safetensors").write_bytes(b"fake")
+        test_state.state.app_settings.use_local_text_encoder = True
         test_state.video_processor.register_video(
             str(video_path),
             FakeCapture(frames=["f1", "f2"], fps=24, width=64, height=64),

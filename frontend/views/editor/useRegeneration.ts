@@ -18,8 +18,8 @@ export interface UseRegenerationParams {
   deleteTakeFromAsset: (projectId: string, assetId: string, takeIndex: number) => void
   resolveClipSrc: (clip: TimelineClip | null) => string
   // Generation hook values
-  regenGenerate: (prompt: string, imagePath: string | null, settings: GenerationSettings) => Promise<{ success: boolean; videoPath: string | null }>
-  regenGenerateImage: (prompt: string, settings: GenerationSettings) => Promise<{ success: boolean }>
+  regenGenerate: (prompt: string, imagePath: string | null, settings: GenerationSettings, audioPath?: string | null, imageConditionings?: Array<{ path: string; frame_idx: number; strength: number }>) => Promise<{ success: boolean; videoPath: string | null }>
+  regenGenerateImage: (prompt: string, settings: GenerationSettings, imagePath?: string | null, strength?: number) => Promise<{ success: boolean }>
   regenVideoUrl: string | null
   regenVideoPath: string | null
   regenImageUrl: string | null
@@ -137,6 +137,7 @@ export function useRegeneration(params: UseRegenerationParams) {
           duration: clip.duration,
           generationParams: {
             mode: 'image-to-video',
+            inputImageUrl: resolveClipSrc(clip),
             prompt: i2vPrompt,
             model: savedI2vSettings.model,
             duration: savedI2vSettings.duration,
@@ -286,7 +287,7 @@ export function useRegeneration(params: UseRegenerationParams) {
         imageAspectRatio: params.imageAspectRatio || '16:9',
         imageSteps: params.imageSteps || 4,
         variations: 1,
-      })
+      }, params.inputImageUrl ? fileUrlToPath(params.inputImageUrl) : null, params.imageStrength)
     } else {
       // For video generation (T2V or I2V)
       // Extract filesystem path from the input image URL if present
@@ -309,7 +310,7 @@ export function useRegeneration(params: UseRegenerationParams) {
         ? sanitizeForcedApiVideoSettings(rawVideoSettings)
         : rawVideoSettings
 
-      regenGenerate(params.prompt, imagePath, videoSettings)
+      regenGenerate(params.prompt, imagePath, videoSettings, null, params.imageConditionings)
     }
   }, [currentProjectId, isRegenerating, assets, clips, regenGenerate, regenGenerateImage, resolveClipSrc, updateAsset, shouldVideoGenerateWithLtxApi])
 

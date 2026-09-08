@@ -777,11 +777,11 @@ export function LeftPanel(props: LeftPanelProps) {
                             e.stopPropagation()
                             if (currentProjectId) {
                               pushAssetUndoRef.current()
-                              const idx = Math.max(0, (asset.activeTakeIndex ?? 0) - 1)
+                              const idx = Math.max(0, (asset.activeTakeIndex ?? (asset.takes?.length ?? 1) - 1) - 1)
                               setAssetActiveTake(currentProjectId, asset.id, idx)
                             }
                           }}
-                          disabled={(asset.activeTakeIndex ?? 0) === 0}
+                          disabled={(asset.activeTakeIndex ?? (asset.takes?.length ?? 1) - 1) === 0}
                           className="p-0.5 text-blue-300 hover:text-white disabled:text-zinc-600 transition-colors"
                         >
                           <ChevronLeft className="h-3 w-3" />
@@ -798,7 +798,7 @@ export function LeftPanel(props: LeftPanelProps) {
                       >
                         <Layers className="h-2.5 w-2.5 text-blue-400" />
                         <span className="text-[9px] text-blue-300 font-medium">
-                          {(asset.activeTakeIndex ?? 0) + 1}/{asset.takes.length}
+                          {(asset.activeTakeIndex ?? (asset.takes?.length ?? 1) - 1) + 1}/{asset.takes.length}
                         </span>
                       </button>
                       <Tooltip content="Next take" side="right">
@@ -807,11 +807,11 @@ export function LeftPanel(props: LeftPanelProps) {
                             e.stopPropagation()
                             if (currentProjectId && asset.takes) {
                               pushAssetUndoRef.current()
-                              const idx = Math.min(asset.takes.length - 1, (asset.activeTakeIndex ?? 0) + 1)
+                              const idx = Math.min(asset.takes.length - 1, (asset.activeTakeIndex ?? (asset.takes?.length ?? 1) - 1) + 1)
                               setAssetActiveTake(currentProjectId, asset.id, idx)
                             }
                           }}
-                          disabled={asset.takes && (asset.activeTakeIndex ?? 0) >= asset.takes.length - 1}
+                          disabled={asset.takes && (asset.activeTakeIndex ?? (asset.takes?.length ?? 1) - 1) >= asset.takes.length - 1}
                           className="p-0.5 text-blue-300 hover:text-white disabled:text-zinc-600 transition-colors"
                         >
                           <ChevronRight className="h-3 w-3" />

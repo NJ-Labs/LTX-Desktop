@@ -31,8 +31,8 @@ interface GenerationProgress {
 }
 
 interface UseGenerationReturn extends GenerationState {
-  generate: (prompt: string, imagePath: string | null, settings: GenerationSettings, audioPath?: string | null) => Promise<{ success: boolean; videoPath: string | null }>
-  generateImage: (prompt: string, settings: GenerationSettings) => Promise<{ success: boolean }>
+  generate: (prompt: string, imagePath: string | null, settings: GenerationSettings, audioPath?: string | null, imageConditionings?: Array<{ path: string; frame_idx: number; strength: number }>) => Promise<{ success: boolean; videoPath: string | null }>
+  generateImage: (prompt: string, settings: GenerationSettings, imagePath?: string | null, strength?: number) => Promise<{ success: boolean }>
   cancel: () => void
   reset: () => void
 }
@@ -121,6 +121,7 @@ export function useGeneration(): UseGenerationReturn {
     imagePath: string | null,
     settings: GenerationSettings,
     audioPath?: string | null,
+    imageConditionings?: Array<{ path: string; frame_idx: number; strength: number }>,
   ): Promise<{ success: boolean; videoPath: string | null }> => {
     const statusMsg = 'Loading model...'
 
@@ -158,6 +159,7 @@ export function useGeneration(): UseGenerationReturn {
       if (imagePath) {
         body.imagePath = imagePath
       }
+      if (imageConditionings?.length) body.imageConditionings = imageConditionings
       if (audioPath) {
         body.audioPath = audioPath
       }
@@ -337,7 +339,9 @@ export function useGeneration(): UseGenerationReturn {
 
   const generateImage = useCallback(async (
     prompt: string,
-    settings: GenerationSettings
+    settings: GenerationSettings,
+    imagePath?: string | null,
+    strength = 0.6,
   ): Promise<{ success: boolean }> => {
     if (forceApiGenerations) {
       try {
@@ -435,6 +439,7 @@ export function useGeneration(): UseGenerationReturn {
           height: dims.height,
           numSteps,
           numImages,
+          ...(imagePath ? { imagePath, strength } : {}),
         }),
         signal: abortControllerRef.current.signal,
       })

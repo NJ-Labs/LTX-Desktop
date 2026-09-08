@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from threading import RLock
 from typing import TYPE_CHECKING
+import uuid
 
 from handlers.base import StateHandlerBase
 from handlers.text_handler import TextHandler
@@ -21,6 +22,7 @@ from services.interfaces import (
     RetakePipeline,
     VideoPipelineModelType,
 )
+from services.ltx_pipeline_common import get_quantization_policy_class
 from services.services_utils import device_supports_fp8, get_device_type
 from state.app_state_types import (
     A2VPipelineState,
@@ -76,6 +78,27 @@ class PipelinesHandler(StateHandlerBase):
                 raise RuntimeError("Generation already running; cannot swap pipelines")
             case _:
                 return
+
+    def _try_reserve_warmup(self, operation_id: str) -> bool:
+        with self._lock:
+            if self.state.native_run_id is not None or self.state.comfy_run_id is not None:
+                return False
+            match self.state.gpu_slot:
+                case GpuSlot(generation=GenerationRunning()):
+                    return False
+                case _:
+                    pass
+            if isinstance(self.state.pending_generation, GenerationRunning):
+                return False
+            if isinstance(self.state.api_generation, GenerationRunning):
+                return False
+            self.state.native_run_id = operation_id
+            return True
+
+    def _release_warmup(self, operation_id: str) -> None:
+        with self._lock:
+            if self.state.native_run_id == operation_id:
+                self.state.native_run_id = None
 
     def _pipeline_matches_model_type(self, model_type: VideoPipelineModelType) -> bool:
         match self.state.gpu_slot:
@@ -198,6 +221,8 @@ class PipelinesHandler(StateHandlerBase):
         already matches the current setting.
         """
         with self._lock:
+            if self.state.native_run_id is not None or self.state.comfy_run_id is not None:
+                return False
             match self.state.gpu_slot:
                 case GpuSlot(active_pipeline=VideoPipelineState(), generation=GenerationRunning()):
                     return False
@@ -454,8 +479,7 @@ class PipelinesHandler(StateHandlerBase):
 
         self._evict_gpu_pipeline_for_swap()
 
-        from ltx_core.quantization import QuantizationPolicy
-
+        QuantizationPolicy = get_quantization_policy_class()
         quantization = QuantizationPolicy.fp8_cast() if quantized else None
         pipeline = self._retake_pipeline_class.create(
             checkpoint_path=str(resolve_model_path(self.models_dir, self.config.model_download_specs,"checkpoint")),
@@ -472,6 +496,12 @@ class PipelinesHandler(StateHandlerBase):
         return state
 
     def warmup_pipeline(self, model_type: VideoPipelineModelType) -> None:
-        state = self.load_gpu_pipeline(model_type, should_warm=False)
-        warmup_path = self.config.outputs_dir / f"_warmup_{model_type}.mp4"
-        state.pipeline.warmup(output_path=str(warmup_path))
+        operation_id = f"warmup-{uuid.uuid4().hex[:8]}"
+        if not self._try_reserve_warmup(operation_id):
+            raise RuntimeError("GPU is busy; cannot warm a pipeline")
+        try:
+            state = self.load_gpu_pipeline(model_type, should_warm=False)
+            warmup_path = self.config.outputs_dir / f"_warmup_{model_type}.mp4"
+            state.pipeline.warmup(output_path=str(warmup_path))
+        finally:
+            self._release_warmup(operation_id)

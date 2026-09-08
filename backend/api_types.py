@@ -5,9 +5,51 @@ from __future__ import annotations
 from typing import Literal, NamedTuple, TypeAlias, TypedDict
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, JsonValue, StrictBool, StrictFloat, StrictInt, StrictStr
 
 NonEmptyPrompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+# ComfyUI keeps the editable graph separately from the executable API prompt.
+ComfyScalar: TypeAlias = StrictStr | StrictInt | StrictFloat | StrictBool
+
+
+class ComfyNodePayload(BaseModel):
+    class_type: NonEmptyPrompt
+    inputs: dict[str, JsonValue]
+    model_config = ConfigDict(extra="allow")
+
+
+class ComfyInputPayload(BaseModel):
+    key: NonEmptyPrompt
+    label: NonEmptyPrompt
+    node_id: NonEmptyPrompt
+    input_name: NonEmptyPrompt
+
+
+class ComfyWorkflowRequest(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+    description: str = Field(default="", max_length=2000)
+    prompt: dict[str, ComfyNodePayload] = Field(min_length=1, max_length=5000)
+    workflow: dict[str, JsonValue] = Field(default_factory=dict)
+    inputs: list[ComfyInputPayload] = Field(default_factory=lambda: [], max_length=100)
+
+
+class ComfyWorkflowPayload(ComfyWorkflowRequest):
+    id: str
+    updated_at: str
+
+
+class ComfyRunRequest(BaseModel):
+    values: dict[str, ComfyScalar] = Field(default_factory=dict)
+
+
+class ComfyRunPayload(BaseModel):
+    id: str
+    workflow_id: str
+    prompt_id: str
+    state: Literal["queued", "running", "complete", "error", "cancelled"]
+    error: str | None = None
+    outputs: list[dict[str, JsonValue]] = Field(default_factory=lambda: [])
 ModelFileType = Literal[
     "checkpoint",
     "dev_checkpoint",
@@ -278,16 +320,19 @@ class GenerateVideoRequest(BaseModel):
     fps: str = "24"
     audio: str = "false"
     imagePath: str | None = None
+    imageConditionings: list[ImageConditioningInput] = Field(default_factory=lambda: [], max_length=16)
     audioPath: str | None = None
     aspectRatio: Literal["16:9", "9:16"] = "16:9"
 
 
 class GenerateImageRequest(BaseModel):
     prompt: NonEmptyPrompt
-    width: int = 1024
-    height: int = 1024
-    numSteps: int = 4
+    width: int = Field(default=1024, ge=16)
+    height: int = Field(default=1024, ge=16)
+    numSteps: int = Field(default=4, ge=1)
     numImages: int = 1
+    imagePath: str | None = None
+    strength: float = Field(default=0.6, gt=0.0, le=1.0)
 
 
 class EnhancePromptRequest(BaseModel):
@@ -340,6 +385,27 @@ class RetakeRequest(BaseModel):
     duration: float
     prompt: str = ""
     mode: str = "replace_audio_and_video"
+
+
+class ExtendRequest(BaseModel):
+    video_path: str
+    duration: float = Field(ge=2.0, le=20.0)
+    prompt: str = ""
+    mode: Literal["end"] = "end"
+
+
+class ExtendResponse(BaseModel):
+    status: str
+    video_path: str | None = None
+
+
+class ExtendLimitsResponse(BaseModel):
+    fps: float
+    source_frames: int
+    corrected_source_frames: int
+    max_additional_seconds: float
+    minimum_additional_seconds: float = 2.0
+    can_extend: bool
 
 
 class IcLoraExtractRequest(BaseModel):

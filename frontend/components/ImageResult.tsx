@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Download, RefreshCw, ImageIcon, Video, Heart, Pencil, MoreHorizontal } from 'lucide-react'
+import { Download, RefreshCw, ImageIcon, Video, Heart, Pencil } from 'lucide-react'
 import { Button } from './ui/button'
 
 interface ImageResultProps {
@@ -8,6 +8,9 @@ interface ImageResultProps {
   progress: number
   statusMessage: string
   onCreateVideo: () => void
+  onEdit: () => void
+  onToggleFavorite?: () => void
+  isFavorite?: boolean
 }
 
 export function ImageResult({ 
@@ -15,7 +18,10 @@ export function ImageResult({
   isGenerating, 
   progress, 
   statusMessage,
-  onCreateVideo 
+  onCreateVideo,
+  onEdit,
+  onToggleFavorite,
+  isFavorite = false,
 }: ImageResultProps) {
   const [isHovered, setIsHovered] = useState(false)
 
@@ -61,6 +67,8 @@ export function ImageResult({
         ) : imageUrl ? (
           <div 
             className="relative w-full h-full flex items-center justify-center bg-black"
+            onFocusCapture={() => setIsHovered(true)}
+            onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setIsHovered(false) }}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
           >
@@ -84,9 +92,13 @@ export function ImageResult({
                     size="icon"
                     variant="ghost"
                     className="h-9 w-9 bg-black/50 hover:bg-black/70 text-white rounded-full backdrop-blur-sm"
-                    title="Favorite"
+                    title={onToggleFavorite ? "Favorite" : "Saving to library..."}
+                    aria-label="Favorite image"
+                    aria-pressed={isFavorite}
+                    disabled={!onToggleFavorite}
+                    onClick={onToggleFavorite}
                   >
-                    <Heart className="h-4 w-4" />
+                    <Heart className={`h-4 w-4 ${isFavorite ? 'fill-current' : ''}`} />
                   </Button>
                 </div>
                 <div className="flex items-center gap-2">
@@ -99,14 +111,7 @@ export function ImageResult({
                   >
                     <Download className="h-4 w-4" />
                   </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-9 w-9 bg-black/50 hover:bg-black/70 text-white rounded-full backdrop-blur-sm"
-                    title="More options"
-                  >
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
+
                 </div>
               </div>
               
@@ -116,6 +121,7 @@ export function ImageResult({
                   variant="ghost"
                   className="h-10 px-4 bg-black/50 hover:bg-black/70 text-white rounded-full backdrop-blur-sm flex items-center gap-2"
                   title="Edit image"
+                  onClick={onEdit}
                 >
                   <Pencil className="h-4 w-4" />
                   <span className="text-sm font-medium">Edit</span>

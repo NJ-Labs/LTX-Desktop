@@ -3,6 +3,7 @@ import path from 'path'
 import fs from 'fs'
 import { isDev, getCurrentDir } from './config'
 import { logger } from './logger'
+import { getAuthToken, getBackendUrl } from './python-backend'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -33,6 +34,22 @@ export function createWindow(): BrowserWindow {
     backgroundColor: '#1a1a1a',
     titleBarStyle: 'default',
     show: false,
+  })
+
+  // Frames, video tags and WebSockets cannot attach the renderer's Bearer
+  // header themselves. Scope authentication to our managed backend origin.
+  mainWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+    const backend = getBackendUrl()
+    const token = getAuthToken()
+    if (backend && token) {
+      const target = new URL(details.url)
+      const expected = new URL(backend)
+      const scheme = target.protocol === 'ws:' ? 'http:' : target.protocol === 'wss:' ? 'https:' : target.protocol
+      if (scheme === expected.protocol && target.host === expected.host) {
+        details.requestHeaders.Authorization = `Bearer ${token}`
+      }
+    }
+    callback({ requestHeaders: details.requestHeaders })
   })
 
   // Load the app

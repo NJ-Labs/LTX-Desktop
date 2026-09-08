@@ -136,9 +136,16 @@ class IcLoraHandler(StateHandlerBase):
 
         ic_state: ICLoraState | None = None
         if req.conditioning_type in {"depth", "pose"}:
-            ic_state = self._load_resources("union", req.conditioning_type)
-
-        result = self._build_conditioning_frame(frame, req.conditioning_type, ic_state)
+            operation_id = f"conditioning-{uuid.uuid4().hex[:8]}"
+            if not self._generation.try_reserve_native_operation(operation_id):
+                raise HTTPError(409, "Generation already in progress")
+            try:
+                ic_state = self._load_resources("union", req.conditioning_type)
+                result = self._build_conditioning_frame(frame, req.conditioning_type, ic_state)
+            finally:
+                self._generation.release_generation(operation_id)
+        else:
+            result = self._build_conditioning_frame(frame, req.conditioning_type, ic_state)
 
         conditioning = self._video_processor.encode_frame_jpeg(result, quality=85)
         original = self._video_processor.encode_frame_jpeg(frame, quality=85)
@@ -157,9 +164,6 @@ class IcLoraHandler(StateHandlerBase):
         return int(time.time()) % 2147483647
 
     def generate(self, req: IcLoraGenerateRequest) -> IcLoraGenerateResponse:
-        if self._generation.is_generation_running():
-            raise HTTPError(409, "Generation already in progress")
-
         input_path = Path(req.video_path)
         if not input_path.exists():
             raise HTTPError(400, f"Input media not found: {req.video_path}")
@@ -169,6 +173,9 @@ class IcLoraHandler(StateHandlerBase):
                 raise HTTPError(400, f"Character anchor image not found: {image.path}")
 
         generation_id = uuid.uuid4().hex[:8]
+        if not self._generation.try_reserve_generation(generation_id):
+            raise HTTPError(409, "Generation already in progress")
+
         t_total_start = time.perf_counter()
         logger.info(
             "[ic-lora] Generation started (adapter=%s, conditioning=%s, anchors=%d)",
@@ -301,8 +308,11 @@ class IcLoraHandler(StateHandlerBase):
             self._generation.update_progress("inference", 15, 0, 1)
 
             width = 768
-            height = round(width * input_height / input_width / 128) * 128
-            height = max(height, 128)
+            if req.conditioning_type == "reference_sheet":
+                height = INGREDIENTS_HEIGHT
+            else:
+                height = round(width * input_height / input_width / 128) * 128
+                height = max(height, 128)
 
             output_path = (
                 self.config.outputs_dir / f"ic_lora_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.mp4"
@@ -349,3 +359,4 @@ class IcLoraHandler(StateHandlerBase):
             raise HTTPError(500, f"Generation error: {exc}") from exc
         finally:
             self._text.clear_api_embeddings()
+            self._generation.release_generation(generation_id)

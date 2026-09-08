@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:
     import torch
@@ -39,4 +39,20 @@ class RetakePipeline(Protocol):
         regenerate_audio: bool = True,
         enhance_prompt: bool = False,
         distilled: bool = True,
+    ) -> None: ...
+
+    def extend(
+        self,
+        *,
+        video_path: str,
+        prompt: str,
+        extend_frames: int,
+        mode: Literal["end"],
+        seed: int,
+        output_path: str,
+        negative_prompt: str = "",
+        regenerate_audio: bool = True,
+        enhance_prompt: bool = False,
+        distilled: bool = True,
+        target_frames: int | None = None,
     ) -> None: ...

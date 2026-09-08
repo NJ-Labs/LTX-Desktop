@@ -12,6 +12,7 @@ files:
   - package.json
   - LICENSE.txt
   - NOTICES.md
+  - resources/LTX-2.3-LICENSE.txt
   - "!**/*.map"
 
 asarUnpack:
@@ -55,6 +56,11 @@ extraResources:
       - "!**/*.pyc"
   - from: python-deps-hash.txt
     to: python-deps-hash.txt
+  - from: resources/comfyui_bridge
+    to: ComfyUI/custom_nodes/ltx_studio_bridge
+    filter:
+      - "**/*.py"
+      - "web/*.js"
 
 win:
   target:

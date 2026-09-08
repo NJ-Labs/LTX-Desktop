@@ -14,6 +14,8 @@ from services.ltx_pipeline_common import (
     DistilledNativePipeline,
     default_tiling_config,
     encode_video_output,
+    get_quantization_policy_class,
+    guiding_image_conditionings,
     video_chunks_number,
 )
 from services.services_utils import AudioOrNone, TilingConfigType, device_supports_fp8
@@ -94,9 +96,9 @@ class LTXFastVideoPipeline:
     ) -> None:
         self.use_upscaler = use_upscaler
         if use_upscaler:
-            from ltx_core.quantization import QuantizationPolicy
             from ltx_pipelines.distilled import DistilledPipeline
 
+            QuantizationPolicy = get_quantization_policy_class()
             self.pipeline: Any = DistilledPipeline(
                 distilled_checkpoint_path=checkpoint_path,
                 gemma_root=cast(str, gemma_root),
@@ -126,16 +128,18 @@ class LTXFastVideoPipeline:
     ) -> tuple[torch.Tensor | Iterator[torch.Tensor], AudioOrNone]:
         from ltx_pipelines.utils.args import ImageConditioningInput as _LtxImageInput
 
-        return self.pipeline(
-            prompt=prompt,
-            seed=seed,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            frame_rate=frame_rate,
-            images=[_LtxImageInput(img.path, img.frame_idx, img.strength) for img in images],
-            tiling_config=tiling_config,
-        )
+        module_names = ("ltx_pipelines.distilled",) if self.use_upscaler else ()
+        with guiding_image_conditionings(images, module_names):
+            return self.pipeline(
+                prompt=prompt,
+                seed=seed,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                frame_rate=frame_rate,
+                images=[_LtxImageInput(img.path, img.frame_idx, img.strength) for img in images],
+                tiling_config=tiling_config,
+            )
 
     @torch.inference_mode()
     def generate(

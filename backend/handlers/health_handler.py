@@ -144,10 +144,7 @@ class HealthHandler(StateHandlerBase):
                 self.set_startup_ready()
                 return
 
-            self.set_startup_loading("Loading Fast pipeline", 30)
-            self._pipelines.load_gpu_pipeline("fast", should_warm=False)
-
-            self.set_startup_loading("Warming Fast pipeline", 60)
+            self.set_startup_loading("Loading and warming Fast pipeline", 30)
             self._pipelines.warmup_pipeline("fast")
             with self._lock:
                 match self.state.gpu_slot:
@@ -166,7 +163,10 @@ class HealthHandler(StateHandlerBase):
             self.set_startup_ready()
         except Exception as exc:
             log_background_exception("health-default-warmup", exc)
-            self.set_startup_error(str(exc))
+            if "GPU is busy" in str(exc):
+                self.set_startup_ready()
+            else:
+                self.set_startup_error(str(exc))
 
     def start_manual_preload(self) -> bool:
         """Trigger a manual model preload (load + warm pipelines) in the background.
@@ -175,6 +175,8 @@ class HealthHandler(StateHandlerBase):
         """
         with self._lock:
             if isinstance(self.state.startup, StartupLoading):
+                return False
+            if self.state.native_run_id is not None or self.state.comfy_run_id is not None:
                 return False
             self.state.startup = StartupLoading(current_step="Starting preload", progress=1)
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from PIL.Image import Image as PILImage
+
 from services.services_utils import ImagePipelineOutputLike
 
 
@@ -21,6 +23,16 @@ class ImageGenerationPipeline(Protocol):
         height: int,
         width: int,
         guidance_scale: float,
+        num_inference_steps: int,
+        seed: int,
+    ) -> ImagePipelineOutputLike:
+        ...
+
+    def edit(
+        self,
+        prompt: str,
+        image: PILImage,
+        strength: float,
         num_inference_steps: int,
         seed: int,
     ) -> ImagePipelineOutputLike:

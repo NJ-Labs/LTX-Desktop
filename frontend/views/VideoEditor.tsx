@@ -57,6 +57,10 @@ import { buildMenuDefinitions } from './editor/buildMenuDefinitions'
 import { usePlaybackEngine } from './editor/usePlaybackEngine'
 import { GapGenerationModal } from './editor/GapGenerationModal'
 import { GenerationErrorDialog } from '../components/GenerationErrorDialog'
+import { ExtendVideoModal } from './editor/ExtendVideoModal'
+import { extensionSource, replaceWithExtension } from './editor/extend-video'
+import { copyToAssetFolder } from '../lib/asset-copy'
+import { pathToBrowserUrl } from '../lib/web-mode'
 import { I2vGenerationModal } from './editor/I2vGenerationModal'
 import { SubtitleTrackStyleEditor } from './editor/SubtitleTrackStyleEditor'
 
@@ -1505,6 +1509,16 @@ export function VideoEditor() {
     return assets.find(a => a.id === clip.assetId) || clip.asset
   }, [assets])
 
+  const [extendTarget, setExtendTarget] = useState<{ clip: TimelineClip; timelineId: string; projectId: string; source: { path: string; url: string }; error?: string } | null>(null)
+  const handleExtendClip = (clip: TimelineClip) => {
+    if (!currentProjectId) return
+    let source = { path: '', url: '' }
+    let error: string | undefined
+    try { source = extensionSource(clip, getLiveAsset(clip)) } catch (cause) { error = cause instanceof Error ? cause.message : 'Cannot extend this clip.' }
+    if (forceApiGenerations) error = 'Video extension requires local LTX 2.3. Switch off cloud generation in Settings.'
+    setExtendTarget({ clip: { ...clip }, timelineId: activeTimelineId, projectId: currentProjectId, source, error })
+  }
+
   const handleRetakeClip = useCallback((clip: TimelineClip) => {
     const liveAsset = getLiveAsset(clip)
     if (!liveAsset) return
@@ -1704,7 +1718,7 @@ export function VideoEditor() {
     setShowImportTimelineModal, setShowExportModal, handleExportTimelineXml, handleExportSrt,
     undoRef, redoRef, cutRef, copyRef, pasteRef,
     setSelectedClipIds, handleInsertEdit, handleOverwriteEdit, matchFrameRef, setKbEditorOpen,
-    splitClipAtPlayhead, duplicateClip, pushUndo, setClips, updateClip, setTracks,
+    splitClipAtPlayhead, duplicateClip, pushUndo, pushTrackUndo, setClips, updateClip, setTracks,
     addTextClip, addSubtitleTrack, createAdjustmentLayerAsset, setSnapEnabled, fitToViewRef, setZoom,
     setShowSourceMonitor, setShowEffectsBrowser, setShowPropertiesPanel,
     canUseIcLora, onICLoraClip: handleICLoraClip,
@@ -2121,7 +2135,7 @@ export function VideoEditor() {
               <div className="h-px bg-zinc-700 my-0.5" />
               <button
                 disabled={true}
-                title="Coming Soon!"
+                title="Timeline upscaling is not supported. Export the timeline, then upscale the exported video."
                 className="w-full text-left px-3 py-1.5 text-xs text-zinc-500 flex items-center gap-2 opacity-50 cursor-not-allowed"
               >
                 <ZoomIn className="h-3 w-3" />
@@ -4097,6 +4111,7 @@ export function VideoEditor() {
             setSelectedAssetIds={setSelectedAssetIds}
             setI2vClipId={setI2vClipId}
             setI2vPrompt={setI2vPrompt}
+            onExtendClip={handleExtendClip}
             onRetakeClip={handleRetakeClip}
             onICLoraClip={handleICLoraClip}
             canUseIcLora={canUseIcLora}
@@ -4108,6 +4123,28 @@ export function VideoEditor() {
       
       
       
+      {extendTarget && <ExtendVideoModal
+        source={extendTarget.source}
+        sourceDuration={extendTarget.clip.duration}
+        disabledReason={extendTarget.error}
+        onClose={() => setExtendTarget(null)}
+        onComplete={async (path, duration, prompt, replace) => {
+          const target = extendTarget
+          const copied = await copyToAssetFolder(path, target.projectId)
+          const asset = addAsset(target.projectId, { type: 'video', path: copied?.path || path, url: copied?.url || pathToBrowserUrl(path), prompt, resolution: target.clip.asset?.resolution || '', duration })
+          if (!replace) return
+          if (activeTimelineIdRef.current !== target.timelineId || currentProjectId !== target.projectId) throw new Error('The timeline changed. The extension is saved in your project library.')
+          if (!duration) throw new Error('Could not read the video duration. The extension is saved in your project library; add it manually.')
+          if (tracks.some(track => track.locked)) throw new Error('A track is locked. The extension is saved in your project library; unlock tracks before replacing.')
+          const updated = replaceWithExtension(clips, target.clip, asset)
+          pushTrackUndo()
+          setClips(updated)
+          const end = target.clip.startTime + target.clip.duration
+          const delta = duration - target.clip.duration
+          setSubtitles(previous => previous.map(subtitle => subtitle.startTime >= end - 0.001 ? { ...subtitle, startTime: subtitle.startTime + delta, endTime: subtitle.endTime + delta } : subtitle))
+        }}
+      />}
+
       <ExportModal
         open={showExportModal}
         onClose={() => setShowExportModal(false)}

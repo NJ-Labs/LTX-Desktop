@@ -23,8 +23,10 @@ interface SettingsModalProps {
 type TabId = 'general' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const { settings, updateSettings, saveLtxApiConfig, saveFalApiConfig, saveGeminiApiKey, savePromptEnhancerApiKey, forceApiGenerations, offlineMode, serverDataDir } = useAppSettings()
+  const { settings, updateSettings, settingsSaveError, retrySettingsSave, saveLtxApiConfig, saveFalApiConfig, saveGeminiApiKey, savePromptEnhancerApiKey, forceApiGenerations, offlineMode, serverDataDir } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [keySaving, setKeySaving] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [ltxApiKeyInput, setLtxApiKeyInput] = useState('')
   const ltxApiKeyInputRef = useRef<HTMLInputElement>(null)
@@ -107,6 +109,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         if (response.ok) {
           const data = await response.json()
           setTextEncoderStatus(data.text_encoder_status)
+          if (data.text_encoder_status?.downloaded) setIsDownloading(false)
         }
       } catch (e) {
         logger.error(`Failed to fetch text encoder status: ${e}`)
@@ -119,6 +122,15 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     return () => clearInterval(interval)
   }, [isOpen, isDownloading])
 
+  useEffect(() => {
+    if (!isDownloading) return
+    const timeout = setTimeout(() => {
+      setIsDownloading(false)
+      setDownloadError('Download timed out. Check the model status and try again.')
+    }, 30 * 60 * 1000)
+    return () => clearTimeout(timeout)
+  }, [isDownloading])
+
   // Handle text encoder download
   const handleDownloadTextEncoder = async () => {
     setIsDownloading(true)
@@ -126,32 +138,14 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     try {
       const response = await backendFetch('/api/text-encoder/download', { method: 'POST' })
       const data = await response.json()
+      if (!response.ok) {
+        throw new Error(typeof data.detail === 'string' ? data.detail : 'Download failed')
+      }
 
       if (data.status === 'already_downloaded') {
         setTextEncoderStatus(prev => prev ? { ...prev, downloaded: true } : null)
+        setIsDownloading(false)
       }
-      // Poll for completion
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusRes = await backendFetch('/api/models/status')
-          if (statusRes.ok) {
-            const statusData = await statusRes.json()
-            setTextEncoderStatus(statusData.text_encoder_status)
-            if (statusData.text_encoder_status?.downloaded) {
-              setIsDownloading(false)
-              clearInterval(pollInterval)
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }, 2000)
-
-      // Timeout after 30 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval)
-        if (isDownloading) setIsDownloading(false)
-      }, 30 * 60 * 1000)
     } catch (e) {
       setDownloadError(e instanceof Error ? e.message : 'Download failed')
       setIsDownloading(false)
@@ -186,8 +180,21 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     setFocusLtxApiKeyInputOnTabChange(true)
   }
 
+  const handleSaveKey = async (provider: 'ltx' | 'fal' | 'gemini') => {
+    const value = (provider === 'ltx' ? ltxApiKeyInput : provider === 'fal' ? falApiKeyInput : geminiApiKeyInput).trim()
+    if (!value || keySaving) return
+    setKeySaving(provider); setActionError(null)
+    try {
+      if (provider === 'ltx') { await saveLtxApiConfig(value, settings.ltxApiBaseUrl); setLtxApiKeyInput('') }
+      else if (provider === 'fal') { await saveFalApiConfig(value, settings.falApiBaseUrl); setFalApiKeyInput('') }
+      else { await saveGeminiApiKey(value); setGeminiApiKeyInput('') }
+    } catch {
+      setActionError('The API key was not saved. Your input is preserved. Check the connection and try Save Key again.')
+    } finally { setKeySaving(null) }
+  }
+
   const handlePromptCacheSizeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const size = Math.max(0, Math.min(1000, parseInt(e.target.value) || 100))
+    const size = Math.max(0, Math.min(1000, Number.isNaN(parseInt(e.target.value)) ? 100 : parseInt(e.target.value)))
     onSettingsChange({
       ...settings,
       promptCacheSize: size,
@@ -248,6 +255,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       await savePromptEnhancerApiKey(promptEnhancerApiKeyInput)
       setPromptEnhancerApiKeyInput('')
     } catch (e) {
+      setPromptEnhancerTestResult({ ok: false, message: 'The API key was not saved. Your input is preserved. Try again.' })
       logger.error(`Failed to save prompt enhancer API key: ${e}`)
     } finally {
       setPromptEnhancerKeySaving(false)
@@ -260,6 +268,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       await savePromptEnhancerApiKey('')
       setPromptEnhancerApiKeyInput('')
     } catch (e) {
+      setPromptEnhancerTestResult({ ok: false, message: 'The API key was not cleared. Check the connection and try again.' })
       logger.error(`Failed to clear prompt enhancer API key: ${e}`)
     } finally {
       setPromptEnhancerKeySaving(false)
@@ -300,7 +309,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const handleToggleAnalytics = () => {
     const next = !analyticsEnabled
     setAnalyticsEnabled(next)
-    window.electronAPI.setAnalyticsEnabled(next).catch(() => {})
+    window.electronAPI.setAnalyticsEnabled(next).catch(() => { setAnalyticsEnabled(!next); setActionError('Analytics preference was not saved. Try again.') })
   }
 
   // Seed handlers
@@ -333,6 +342,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       setModelLicenseText(text)
       setShowModelLicense(true)
     } catch (e) {
+      setActionError('Could not open the model license. Check the connection and try again.')
       logger.error(`Failed to load model license: ${e}`)
     } finally {
       setModelLicenseLoading(false)
@@ -346,6 +356,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       setNoticesText(text)
       setShowNotices(true)
     } catch (e) {
+      setActionError('Could not open third-party notices. Try again.')
       logger.error(`Failed to load notices: ${e}`)
     } finally {
       setNoticesLoading(false)
@@ -387,6 +398,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
             variant="ghost"
             size="icon"
             onClick={onClose}
+            aria-label="Close settings"
             className="h-8 w-8 text-zinc-400 hover:text-white hover:bg-zinc-800"
           >
             <X className="h-4 w-4" />
@@ -414,6 +426,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           })}
         </div>
 
+        {settingsSaveError && <div role="alert" className="mx-6 mt-3 text-sm text-red-300"><p>{settingsSaveError}</p><Button variant="outline" size="sm" onClick={retrySettingsSave} className="mt-2">Retry saving settings</Button></div>}
+        {actionError && <div role="alert" className="mx-6 mt-3 flex items-center gap-3 text-sm text-red-300"><p>{actionError}</p><Button variant="ghost" size="sm" onClick={() => setActionError(null)}>Dismiss</Button></div>}
         {/* Content */}
         <div className="px-6 py-5 space-y-6 h-[60vh] overflow-y-auto">
           {activeTab === 'general' && (
@@ -437,11 +451,14 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                     <Button
                       variant="outline"
                       className="border-zinc-700 flex-shrink-0"
+                      aria-label="Change project assets folder"
                       onClick={async () => {
-                        const result = await window.electronAPI.openProjectAssetsPathChangeDialog()
-                        if (result.success && result.path) {
-                          setProjectAssetsPath(result.path)
-                        }
+                        setActionError(null)
+                        try {
+                          const result = await window.electronAPI.openProjectAssetsPathChangeDialog()
+                          if (result.success && result.path) setProjectAssetsPath(result.path)
+                          else if (result.error) setActionError(result.error)
+                        } catch { setActionError('Could not change the assets folder. Try again.') }
                       }}
                     >
                       <Folder className="h-4 w-4" />
@@ -821,7 +838,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       </label>
                     </div>
                     <p className="text-xs text-zinc-500 leading-relaxed">
-                      Share anonymous usage data to help improve LTX Studio.
+                      {isWebMode() ? 'Analytics controls are available only in the desktop app.' : 'Share anonymous usage data to help improve LTX Studio.'}
                       Only basic technical information is collected — never personal data or generated content.
                     </p>
                   </div>
@@ -829,6 +846,9 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                   {/* Toggle Switch */}
                   <button
                     onClick={handleToggleAnalytics}
+                    disabled={isWebMode()}
+                    aria-label="Anonymous analytics"
+                    aria-pressed={analyticsEnabled}
                     className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
                       analyticsEnabled ? 'bg-violet-500' : 'bg-zinc-700'
                     }`}
@@ -879,13 +899,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       className="flex-1"
                     />
                     <button
-                      onClick={() => {
-                        const trimmed = ltxApiKeyInput.trim()
-                        if (!trimmed) return
-                        void saveLtxApiConfig(trimmed, settings.ltxApiBaseUrl)
-                        setLtxApiKeyInput('')
-                      }}
-                      disabled={!ltxApiKeyInput.trim()}
+                      onClick={() => void handleSaveKey('ltx')}
+                      disabled={Boolean(keySaving) || !ltxApiKeyInput.trim()}
                       className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
                     >
                       Save Key
@@ -946,13 +961,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       className="flex-1"
                     />
                     <button
-                      onClick={() => {
-                        const trimmed = falApiKeyInput.trim()
-                        if (!trimmed) return
-                        void saveFalApiConfig(trimmed, settings.falApiBaseUrl)
-                        setFalApiKeyInput('')
-                      }}
-                      disabled={!falApiKeyInput.trim()}
+                      onClick={() => void handleSaveKey('fal')}
+                      disabled={Boolean(keySaving) || !falApiKeyInput.trim()}
                       className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
                     >
                       Save Key
@@ -1008,13 +1018,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                     <button
-                      onClick={() => {
-                        const trimmed = geminiApiKeyInput.trim()
-                        if (!trimmed) return
-                        void saveGeminiApiKey(trimmed)
-                        setGeminiApiKeyInput('')
-                      }}
-                      disabled={!geminiApiKeyInput.trim()}
+                      onClick={() => void handleSaveKey('gemini')}
+                      disabled={Boolean(keySaving) || !geminiApiKeyInput.trim()}
                       className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
                     >
                       Save Key

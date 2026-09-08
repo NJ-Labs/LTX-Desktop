@@ -10,11 +10,18 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError as UrlHTTPError
+from urllib.parse import urlparse
+from pydantic import JsonValue, TypeAdapter
+from _routes._errors import HTTPError
+
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 logger = logging.getLogger(__name__)
 
@@ -73,22 +80,43 @@ class ComfyUIService:
         self._error: str | None = None
         self._paths: ComfyUIPaths | None = None
         self._lock = asyncio.Lock()
+        self._state_lock = threading.RLock()
+        self._lifecycle_generation = 0
 
     def status(self) -> ComfyUIStatus:
-        paths = self._paths or self._default_paths()
-        return ComfyUIStatus(
-            state=self._state,
-            url=self._url,
-            port=self._port,
-            error=self._error,
-            ltx_data_path=str(paths.ltx_data_path),
-            ltx_models_path=str(paths.ltx_models_path),
-            input_path=str(paths.input_path),
-            output_path=str(paths.output_path),
-            user_path=str(paths.user_path),
-        )
+        with self._state_lock:
+            if self._process is not None and self._process.poll() is not None and self._state in {"running", "starting"}:
+                self._state = "error"
+                self._error = f"ComfyUI exited with code {self._process.returncode}. Restart the connection."
+                self._url = None
+            paths = self._paths or self._default_paths()
+            return ComfyUIStatus(
+                state=self._state,
+                url=self._url,
+                port=self._port,
+                error=self._error,
+                ltx_data_path=str(paths.ltx_data_path),
+                ltx_models_path=str(paths.ltx_models_path),
+                input_path=str(paths.input_path),
+                output_path=str(paths.output_path),
+                user_path=str(paths.user_path),
+            )
 
     async def start(self) -> ComfyUIStatus:
+        try:
+            return await self._start()
+        except Exception as exc:
+            with self._state_lock:
+                # A concurrent stop owns the final state, even if startup fails
+                # while the process is being terminated.
+                if self._state == "stopped":
+                    return self.status()
+                self._state = "error"
+                self._url = None
+                self._error = str(exc)
+            return self.status()
+
+    async def _start(self) -> ComfyUIStatus:
         async with self._lock:
             if self._state == "running" and self._url and await self._probe(self._url):
                 return self.status()
@@ -96,13 +124,26 @@ class ComfyUIService:
             if self._process is not None:
                 self.stop()
 
-            paths = self._build_paths()
-            self._paths = paths
+            with self._state_lock:
+                generation = self._lifecycle_generation
+                self._state = "starting"
+                self._url = None
+                self._port = None
+                self._error = None
+
+            paths = await asyncio.to_thread(self._build_paths)
+            with self._state_lock:
+                if generation != self._lifecycle_generation:
+                    return self.status()
+                self._paths = paths
 
             main_py = paths.root_path / "main.py"
             if not main_py.exists():
-                self._state = "error"
-                self._error = f"ComfyUI was not found at {paths.root_path}"
+                with self._state_lock:
+                    if generation != self._lifecycle_generation:
+                        return self.status()
+                    self._state = "error"
+                    self._error = f"ComfyUI was not found at {paths.root_path}"
                 return self.status()
 
             port = _free_port(8188)
@@ -120,14 +161,18 @@ class ComfyUIService:
                 str(paths.temp_path),
                 "--user-directory",
                 str(paths.user_path),
+                "--database-url",
+                "sqlite:///" + (paths.user_path / "comfyui.db").as_posix(),
                 "--extra-model-paths-config",
                 str(paths.extra_model_paths_config),
                 "--disable-auto-launch",
-                "--enable-cors-header",
-                "*",
                 "--log-stdout",
             ]
-            if _should_force_cpu_mode():
+            if os.environ.get("LTX_OFFLINE", "").lower() in {"1", "true", "yes"}:
+                args.append("--disable-api-nodes")
+            runtime_settings = _runtime_dir(paths.root_path) / "ltx-runtime.json"
+            cpu_runtime = runtime_settings.is_file() and _JSON_OBJECT.validate_json(runtime_settings.read_bytes()).get("cpu") is True
+            if cpu_runtime or await asyncio.to_thread(_should_force_cpu_mode):
                 args.append("--cpu")
             command = _build_launch_command(
                 project_root=self._project_root,
@@ -137,59 +182,81 @@ class ComfyUIService:
                 comfy_args=args,
             )
 
-            self._state = "starting"
-            self._url = url
-            self._port = port
-            self._error = None
             logger.info("Starting ComfyUI: %s", " ".join(command))
 
-            process = subprocess.Popen(
-                command,
-                cwd=str(paths.root_path),
-                env={
-                    **os.environ,
-                    "PYTHONUNBUFFERED": "1",
-                    "HF_HUB_DISABLE_TELEMETRY": "1",
-                    "DO_NOT_TRACK": "1",
-                    "LTX_MEDIA_ROOT": str(paths.ltx_data_path),
-                    "LTX_MODELS_DIR": str(paths.ltx_models_path),
-                    "PYTORCH_ENABLE_MPS_FALLBACK": "1",
-                },
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            self._process = process
+            with self._state_lock:
+                if generation != self._lifecycle_generation:
+                    return self.status()
+                self._url = url
+                self._port = port
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(paths.root_path),
+                    env={
+                        **os.environ,
+                        "PYTHONUNBUFFERED": "1",
+                        "HF_HUB_DISABLE_TELEMETRY": "1",
+                        "DO_NOT_TRACK": "1",
+                        "LTX_MEDIA_ROOT": str(paths.ltx_data_path),
+                        "LTX_MODELS_DIR": str(paths.ltx_models_path),
+                        "PYTORCH_ENABLE_MPS_FALLBACK": "1",
+                        **({"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"} if "--disable-api-nodes" in args else {}),
+                    },
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+                self._process = process
             _stream_process_logs(process)
 
-            ready = await self._wait_ready(url, timeout_seconds=300)
+            ready = await self._wait_ready(url, process=process, generation=generation, timeout_seconds=300)
             if not ready:
-                exit_code = process.poll()
-                self._state = "error"
-                self._error = (
-                    f"ComfyUI exited during startup with code {exit_code}"
-                    if exit_code is not None
-                    else "ComfyUI did not become ready before the startup timeout."
-                )
-                if exit_code is None:
-                    process.terminate()
+                with self._state_lock:
+                    if generation != self._lifecycle_generation or self._process is not process:
+                        return self.status()
+                    exit_code = process.poll()
+                    self._state = "error"
+                    self._error = (
+                        f"ComfyUI exited during startup with code {exit_code}"
+                        if exit_code is not None
+                        else "ComfyUI did not become ready before the startup timeout."
+                    )
+                    if exit_code is None:
+                        process.terminate()
                 return self.status()
 
-            self._state = "running"
+            with self._state_lock:
+                if generation != self._lifecycle_generation or self._process is not process:
+                    return self.status()
+                self._state = "running"
             return self.status()
 
     def stop(self) -> None:
-        if self._process is None:
-            if self._state != "running":
-                self._state = "stopped"
-            return
-        self._process.terminate()
-        self._process = None
-        self._state = "stopped"
-        self._url = None
-        self._port = None
-        self._error = None
+        with self._state_lock:
+            self._lifecycle_generation += 1
+            process = self._process
+            self._process = None
+            self._state = "stopped"
+            self._url = None
+            self._port = None
+            self._error = None
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+    async def request_json(self, method: str, path: str, payload: dict[str, JsonValue] | None = None) -> dict[str, JsonValue]:
+        status = self.status()
+        if status.state != "running" or not status.url:
+            raise HTTPError(503, status.error or "ComfyUI is not running. Start it and retry.")
+        return await asyncio.to_thread(_request_json, method, status.url + path, payload)
 
     def _default_paths(self) -> ComfyUIPaths:
         root_path = self._project_root / "ComfyUI"
@@ -218,19 +285,39 @@ class ComfyUIService:
         ):
             directory.mkdir(parents=True, exist_ok=True)
         _ensure_ltx_video_custom_node(self._project_root, paths.root_path)
+        bridge_source = self._project_root / "resources" / "comfyui_bridge"
+        bridge_target = paths.root_path / "custom_nodes" / "ltx_studio_bridge"
+        if _is_source_tree(self._project_root):
+            shutil.copytree(bridge_source, bridge_target, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        elif not (bridge_target / "__init__.py").is_file():
+            raise RuntimeError("The bundled ComfyUI Studio bridge is missing. Reinstall this desktop build.")
         _write_extra_model_paths_config(paths.ltx_models_path, paths.extra_model_paths_config)
         return paths
 
     async def _probe(self, url: str) -> bool:
         return await asyncio.to_thread(_probe_url, url)
 
-    async def _wait_ready(self, url: str, *, timeout_seconds: int) -> bool:
+    async def _wait_ready(
+        self,
+        url: str,
+        *,
+        process: subprocess.Popen[str],
+        generation: int,
+        timeout_seconds: int,
+    ) -> bool:
         started_at = time.monotonic()
         while time.monotonic() - started_at < timeout_seconds:
-            if self._process is not None and self._process.poll() is not None:
+            with self._state_lock:
+                if generation != self._lifecycle_generation or self._process is not process:
+                    return False
+            if process.poll() is not None:
                 return False
             if await self._probe(url):
                 return True
+            with self._state_lock:
+                if generation != self._lifecycle_generation or self._process is not process:
+                    return False
             await asyncio.sleep(1)
         return False
 
@@ -248,18 +335,20 @@ def _free_port(start_port: int) -> int:
 
 def _probe_url(url: str) -> bool:
     try:
-        request = Request(url, method="GET")
+        request = Request(url.rstrip("/") + "/system_stats", method="GET")
         with urlopen(request, timeout=1.2) as response:
-            return 200 <= response.status < 500
+            return response.status == 200
     except Exception:
         return False
 
 
 def _should_force_cpu_mode() -> bool:
+    if os.environ.get("LTX_COMFYUI_CPU", "").lower() in {"1", "true", "yes"}:
+        return True
     try:
         import torch
 
-        return not bool(torch.cuda.is_available())
+        return not bool(torch.cuda.is_available() or torch.backends.mps.is_available())
     except Exception:
         logger.warning("Could not inspect CUDA availability for ComfyUI startup", exc_info=True)
         return False
@@ -294,6 +383,11 @@ def _is_source_tree(project_root: Path) -> bool:
     return (project_root / "package.json").exists() and (project_root / "backend" / "pyproject.toml").exists()
 
 
+def _runtime_dir(root_path: Path) -> Path:
+    configured = os.environ.get("LTX_COMFYUI_RUNTIME")
+    return Path(configured).expanduser().resolve() if configured else root_path / ".venv"
+
+
 def _build_launch_command(
     *,
     project_root: Path,
@@ -302,25 +396,29 @@ def _build_launch_command(
     ltx_video_custom_node_path: Path,
     comfy_args: list[str],
 ) -> list[str]:
-    uv_path = shutil.which("uv")
-    if uv_path and _is_source_tree(project_root):
-        requirement_args = ["--with-requirements", str(root_path / "requirements.txt")]
-        ltx_video_requirements = ltx_video_custom_node_path / "requirements.txt"
-        if ltx_video_requirements.exists():
-            requirement_args.extend(["--with-requirements", str(ltx_video_requirements)])
-        return [
-            uv_path,
-            "run",
-            "--project",
-            str(project_root / "backend"),
-            *requirement_args,
-            "python",
-            "-u",
-            str(main_py),
-            *comfy_args,
-        ]
+    venv_python = _runtime_dir(root_path) / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if venv_python.is_file() and (_runtime_dir(root_path) / "ltx-runtime.json").is_file():
+        return [str(venv_python), "-u", str(main_py), *comfy_args]
+    if _is_source_tree(project_root):
+        raise RuntimeError("ComfyUI needs its local Python environment. Run python scripts/setup-comfyui.py once from the project folder, then Retry. Use --cpu for editor-only verification.")
 
     return [sys.executable, "-u", str(main_py), *comfy_args]
+
+
+def _request_json(method: str, url: str, payload: dict[str, JsonValue] | None) -> dict[str, JsonValue]:
+    if urlparse(url).scheme not in {"http", "https"}:
+        raise HTTPError(503, "Invalid ComfyUI server URL.")
+    body = None if payload is None else json.dumps(payload, allow_nan=False).encode("utf-8")
+    request = Request(url, data=body, method=method, headers={"Content-Type": "application/json"})
+    try:
+        with urlopen(request, timeout=60) as response:
+            data = response.read()
+            return _JSON_OBJECT.validate_json(data) if data else {}
+    except UrlHTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:8000]
+        raise HTTPError(422 if exc.code == 400 else 502, f"ComfyUI rejected the request: {detail}") from exc
+    except Exception as exc:
+        raise HTTPError(502, f"ComfyUI connection failed: {exc}") from exc
 
 
 def _json_string(value: Path) -> str:

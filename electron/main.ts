@@ -23,6 +23,8 @@ function logAppVersion(): void {
 }
 
 const gotLock = app.requestSingleInstanceLock()
+let shutdownStarted = false
+let shutdownComplete = false
 
 if (!gotLock) {
   app.quit()
@@ -65,8 +67,6 @@ if (!gotLock) {
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
-      stopComfyUI()
-      stopPythonBackend()
       app.quit()
     }
   })
@@ -77,9 +77,16 @@ if (!gotLock) {
     }
   })
 
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
+    if (shutdownComplete) return
+    event.preventDefault()
+    if (shutdownStarted) return
+    shutdownStarted = true
     stopExportProcess()
-    stopComfyUI()
-    stopPythonBackend()
+    void stopComfyUI().finally(() => {
+      stopPythonBackend()
+      shutdownComplete = true
+      app.quit()
+    })
   })
 }

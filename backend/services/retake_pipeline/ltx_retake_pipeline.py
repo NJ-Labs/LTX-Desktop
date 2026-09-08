@@ -18,7 +18,7 @@ with the following fixes applied in-line (no monkey-patching required):
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import torch
 
@@ -100,6 +100,9 @@ class LTXRetakePipeline:
         regenerate_audio: bool = True,
         enhance_prompt: bool = False,
         distilled: bool = False,
+        extend_frames: int = 0,
+        extend_at: Literal["start", "end"] = "end",
+        target_frames: int | None = None,
     ) -> tuple[Iterator[torch.Tensor], Audio]:
         from ltx_core.components.diffusion_steps import EulerDiffusionStep
         from ltx_core.components.guiders import MultiModalGuider
@@ -111,7 +114,7 @@ class LTXRetakePipeline:
         from ltx_core.model.audio_vae import encode_audio as vae_encode_audio
         from ltx_core.model.video_vae import decode_video as vae_decode_video
         from ltx_core.text_encoders.gemma import encode_text
-        from ltx_core.types import AudioLatentShape, VideoPixelShape
+        from ltx_core.types import AudioLatentShape, VideoLatentShape, VideoPixelShape
         from ltx_pipelines.utils.helpers import (
             cleanup_memory,
             multi_modal_guider_denoising_func,
@@ -142,7 +145,8 @@ class LTXRetakePipeline:
         except ImportError:
             _distilled_sigmas = [1.0, 0.9, 0.7, 0.5, 0.3, 0.2, 0.1, 0.04, 0.0]
 
-        if start_time >= end_time:
+        is_extend = extend_frames > 0
+        if not is_extend and start_time >= end_time:
             raise ValueError(f"start_time ({start_time}) must be less than end_time ({end_time})")
 
         effective_seed = int(torch.randint(0, 2**31, (1,)).item()) if seed < 0 else seed
@@ -155,6 +159,8 @@ class LTXRetakePipeline:
         # --- Encode source video (tiled) ---
         video_encoder = self.model_ledger.video_encoder()
         fps, num_pixel_frames, src_width, src_height = get_videostream_metadata(video_path)
+        if target_frames is not None:
+            num_pixel_frames = target_frames
         output_shape = VideoPixelShape(
             batch=1, frames=num_pixel_frames, width=src_width, height=src_height, fps=fps,
         )
@@ -169,10 +175,30 @@ class LTXRetakePipeline:
         initial_video_latent = video_encoder.tiled_encode(pixel_video, tiling)
         del pixel_video
 
+        target_shape = output_shape
+        region_start = start_time
+        region_end = end_time
+        if is_extend:
+            target_shape = output_shape._replace(frames=output_shape.frames + extend_frames)
+            source_latent_frames = VideoLatentShape.from_pixel_shape(output_shape).frames
+            target_latent_frames = VideoLatentShape.from_pixel_shape(target_shape).frames
+            initial_video_latent = self._pad_latent_frames(
+                initial_video_latent,
+                target_latent_frames - source_latent_frames,
+                extend_at,
+            )
+            seam_frames = round(0.5 * fps)
+            if extend_at == "start":
+                region_start = 0.0
+                region_end = min(target_shape.frames, extend_frames + seam_frames) / fps
+            else:
+                region_start = max(0, output_shape.frames - seam_frames) / fps
+                region_end = target_shape.frames / fps
+
         video_conditionings: list[ConditioningItem] = [
             TemporalRegionMask(
-                start_time=start_time if regenerate_video else 0.0,
-                end_time=end_time if regenerate_video else 0.0,
+                start_time=region_start if regenerate_video else 0.0,
+                end_time=region_end if regenerate_video else 0.0,
                 fps=fps,
             )
         ]
@@ -213,10 +239,18 @@ class LTXRetakePipeline:
                 )
                 initial_audio_latent = torch.cat([initial_audio_latent, pad], dim=2)
 
+            if is_extend:
+                target_audio_frames = AudioLatentShape.from_video_pixel_shape(target_shape).frames
+                initial_audio_latent = self._pad_latent_frames(
+                    initial_audio_latent,
+                    target_audio_frames - initial_audio_latent.shape[2],
+                    extend_at,
+                )
+
             audio_conditionings = [
                 TemporalRegionMask(
-                    start_time=start_time if regenerate_audio else 0.0,
-                    end_time=end_time if regenerate_audio else 0.0,
+                    start_time=region_start if regenerate_audio else 0.0,
+                    end_time=region_end if regenerate_audio else 0.0,
                     fps=fps,
                 )
             ]
@@ -299,7 +333,7 @@ class LTXRetakePipeline:
                 )
 
         video_state, video_tools = noise_video_state(
-            output_shape=output_shape,
+            output_shape=target_shape,
             noiser=noiser,
             conditionings=video_conditionings,
             components=self.pipeline_components,
@@ -308,7 +342,7 @@ class LTXRetakePipeline:
             initial_latent=initial_video_latent,
         )
         audio_state, audio_tools = noise_audio_state(
-            output_shape=output_shape,
+            output_shape=target_shape,
             noiser=noiser,
             conditionings=audio_conditionings,
             components=self.pipeline_components,
@@ -387,3 +421,59 @@ class LTXRetakePipeline:
             output_path=output_path,
             video_chunks_number=video_chunks,
         )
+
+    @torch.no_grad()
+    def extend(
+        self,
+        *,
+        video_path: str,
+        prompt: str,
+        extend_frames: int,
+        mode: Literal["start", "end"],
+        seed: int,
+        output_path: str,
+        negative_prompt: str = "",
+        regenerate_audio: bool = True,
+        enhance_prompt: bool = False,
+        distilled: bool = True,
+        target_frames: int | None = None,
+    ) -> None:
+        fps, source_frames, _, _ = get_videostream_metadata(video_path)
+        corrected_source_frames = target_frames if target_frames is not None else source_frames
+        total_frames = corrected_source_frames + extend_frames
+        video_iter, audio = self._run(
+            video_path=video_path,
+            prompt=prompt,
+            start_time=0.0,
+            end_time=0.0,
+            seed=seed,
+            negative_prompt=negative_prompt,
+            regenerate_video=True,
+            regenerate_audio=regenerate_audio,
+            enhance_prompt=enhance_prompt,
+            distilled=distilled,
+            extend_frames=extend_frames,
+            extend_at=mode,
+            target_frames=corrected_source_frames,
+        )
+        tiling_config = TilingConfig.default()
+        encode_video(
+            video=video_iter,
+            fps=int(fps),
+            audio=audio,
+            output_path=output_path,
+            video_chunks_number=get_video_chunks_number(total_frames, tiling_config),
+        )
+
+    @staticmethod
+    def _pad_latent_frames(
+        latent: torch.Tensor,
+        pad_frames: int,
+        at: Literal["start", "end"],
+    ) -> torch.Tensor:
+        if pad_frames <= 0:
+            return latent
+        pad_shape = list(latent.shape)
+        pad_shape[2] = pad_frames
+        padding = torch.zeros(pad_shape, device=latent.device, dtype=latent.dtype)
+        return torch.cat([padding, latent] if at == "start" else [latent, padding], dim=2)

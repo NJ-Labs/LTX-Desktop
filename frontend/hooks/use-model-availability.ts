@@ -140,6 +140,12 @@ function deriveAvailability(
     }
   }
 
+  if (requiredModels.length === 0 && !modelsLoaded && startupStatus !== 'loading') {
+    level = 'partial'
+    label = 'Not loaded'
+    summary = 'No local models are required by the current configuration. Local pipelines are not loaded.'
+  }
+
   if (startupStatus === 'error') {
     level = requiredDownloaded > 0 ? 'partial' : 'inactive'
     label = level === 'partial' ? 'Partial' : 'Not Active'

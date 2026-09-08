@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hmac
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -16,12 +17,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.responses import Response as StarletteResponse
 
 from _routes._errors import HTTPError
+from _routes.extend import router as extend_router
 from _routes.generation import router as generation_router
 from _routes.health import router as health_router
 from _routes.ic_lora import router as ic_lora_router
 from _routes.image_gen import router as image_gen_router
 from _routes.library import router as library_router
-from _routes.comfyui import init_comfyui_service, router as comfyui_router
+from _routes.comfyui import router as comfyui_router
 from _routes.models import router as models_router
 from _routes.prompt_enhancer import router as prompt_enhancer_router
 from _routes.suggest_gap_prompt import router as suggest_gap_prompt_router
@@ -29,11 +31,11 @@ from _routes.retake import router as retake_router
 from _routes.runtime_policy import router as runtime_policy_router
 from _routes.settings import router as settings_router
 from logging_policy import log_http_error, log_unhandled_exception
-from state import init_state_service
+from state import init_state_service, get_state_service
 
 if TYPE_CHECKING:
     from app_handler import AppHandler
-    from services.comfyui_service import ComfyUIService
+    from handlers.comfy_workflows_handler import ComfyRuntime
 
 DEFAULT_ALLOWED_ORIGINS: list[str] = [
     "http://localhost:5173",
@@ -51,11 +53,19 @@ def create_app(
     static_dir: Path | None = None,
     media_roots: list[Path] | None = None,
     media_upload_root: Path | None = None,
-    comfyui_service: "ComfyUIService | None" = None,
+    comfyui_service: "ComfyRuntime | None" = None,
 ) -> FastAPI:
     """Create a configured FastAPI app bound to the provided handler."""
     init_state_service(handler)
-    init_comfyui_service(comfyui_service)
+    handler.comfy_workflows.runtime = comfyui_service
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            if comfyui_service is not None:
+                await handler.comfy_workflows.stop()
 
     serve_frontend = static_dir is not None and static_dir.exists()
 
@@ -64,7 +74,12 @@ def create_app(
         docs_url=None if serve_frontend else "/docs",
         redoc_url=None if serve_frontend else "/redoc",
         openapi_url=None if serve_frontend else "/openapi.json",
+        lifespan=lifespan,
     )
+    app.dependency_overrides[get_state_service] = lambda: handler
+    app.state.handler = handler
+    app.state.auth_token = auth_token
+    app.state.comfy_session = hmac.new(auth_token.encode(), b"ltx-comfy-session", "sha256").hexdigest() if auth_token else ""
     app.state.admin_token = admin_token  # type: ignore[attr-defined]
     app.add_middleware(
         CORSMiddleware,
@@ -84,6 +99,11 @@ def create_app(
             return await call_next(request)
         def _token_matches(candidate: str) -> bool:
             return hmac.compare_digest(candidate, auth_token)
+
+        if request.url.path.startswith("/comfyui-server/") and hmac.compare_digest(
+            request.cookies.get("ltx_comfy_session", ""), app.state.comfy_session,
+        ):
+            return await call_next(request)
 
         # WebSocket: check query param
         if request.headers.get("upgrade", "").lower() == "websocket":
@@ -127,6 +147,7 @@ def create_app(
 
     app.include_router(health_router)
     app.include_router(generation_router)
+    app.include_router(extend_router)
     app.include_router(models_router)
     app.include_router(settings_router)
     app.include_router(image_gen_router)

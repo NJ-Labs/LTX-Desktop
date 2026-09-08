@@ -4,6 +4,7 @@ import { DEFAULT_COLOR_CORRECTION } from '../../types/project'
 import type { GenerationSettings } from '../../components/SettingsPanel'
 import { copyToAssetFolder } from '../../lib/asset-copy'
 import { backendFetch } from '../../lib/backend'
+import { importMediaFile } from '../../lib/media-import'
 import { fileUrlToPath } from '../../lib/url-to-path'
 
 export interface UseGapGenerationParams {
@@ -15,7 +16,7 @@ export interface UseGapGenerationParams {
   currentProjectId: string | null
   addAsset: (projectId: string, asset: Omit<Asset, 'id' | 'createdAt'>) => Asset
   resolveClipSrc: (clip: TimelineClip | null) => string
-  regenGenerate: (prompt: string, imagePath: string | null, settings: GenerationSettings) => Promise<{ success: boolean; videoPath: string | null }>
+  regenGenerate: (prompt: string, imagePath: string | null, settings: GenerationSettings, audioPath?: string | null, imageConditionings?: Array<{ path: string; frame_idx: number; strength: number }>) => Promise<{ success: boolean; videoPath: string | null }>
   regenGenerateImage: (prompt: string, settings: GenerationSettings) => Promise<{ success: boolean }>
   regenVideoUrl: string | null
   regenVideoPath: string | null
@@ -84,6 +85,7 @@ export function useGapGeneration({
     mode: 'text-to-video' | 'image-to-video' | 'text-to-image'
     prompt: string; settings: GenerationSettings
     imageFile: File | null; applyAudio: boolean
+    imageConditionings: Array<{ path: string; frame_idx: number; strength: number }>
   } | null>(null)
 
   // Gap context-aware prompt suggestion
@@ -147,7 +149,7 @@ export function useGapGeneration({
   }, [])
 
   // Handle starting generation in a gap
-  const handleGapGenerate = useCallback(async () => {
+  const handleGapGenerate = useCallback(async (frames?: { start: string | null; end: string | null }) => {
     if (!selectedGap || !gapGenerateMode || !gapPrompt.trim() || !currentProjectId) return
     
     const gap = selectedGap
@@ -161,6 +163,29 @@ export function useGapGeneration({
       duration: Math.min(Math.max(1, Math.round(gapDuration)), gapSettings.model === 'pro' ? 10 : 20),
     }
 
+    const imageConditionings: Array<{ path: string; frame_idx: number; strength: number }> = []
+    if (mode !== 'text-to-image') {
+      for (const [frame_idx, source] of [[0, frames?.start], [-1, frames?.end]] as const) {
+        if (!source) continue
+        let path = fileUrlToPath(source)
+        if (source.startsWith('data:image/')) {
+          const [header, encoded] = source.split(',')
+          const bytes = Uint8Array.from(atob(encoded), character => character.charCodeAt(0))
+          const file = new File([bytes], 'gap-keyframe.png', { type: header.split(':')[1].split(';')[0] })
+          path = (await importMediaFile(file, projectId))?.path ?? null
+        } else if (source.startsWith('blob:') && gapImageFile) {
+          path = (await importMediaFile(gapImageFile, projectId))?.path ?? null
+        }
+        if (!path) throw new Error('Could not import the selected keyframe. Choose the image again.')
+        imageConditionings.push({ path, frame_idx, strength: 1 })
+      }
+      if (!frames && gapImageFile) {
+        const imported = await importMediaFile(gapImageFile, projectId)
+        if (!imported) throw new Error('Could not import the input image. Choose it again.')
+        imageConditionings.push({ path: imported.path, frame_idx: 0, strength: 1 })
+      }
+    }
+
     // Save generating gap state so we can show indicator and place result later
     setGeneratingGap({
       trackIndex: gap.trackIndex,
@@ -170,6 +195,7 @@ export function useGapGeneration({
       prompt: finalPrompt,
       settings,
       imageFile: gapImageFile,
+      imageConditionings,
       applyAudio: gapApplyAudioToTrack,
     })
 
@@ -181,30 +207,13 @@ export function useGapGeneration({
       if (mode === 'text-to-image') {
         await regenGenerateImage(finalPrompt, settings)
       } else {
-        // Convert File to filesystem path for the JSON-based generate API
-        let imagePath: string | null = null
-        if (gapImageFile) {
-          const electronPath = (gapImageFile as any).path as string | undefined
-          if (electronPath) {
-            imagePath = electronPath
-          } else {
-            // In-memory file (e.g. canvas capture) — save to temp file
-            const buf = await gapImageFile.arrayBuffer()
-            const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)))
-            const modelsPath = await window.electronAPI.getModelsPath()
-            const tmpDir = modelsPath.replace(/[/\\]models$/, '')
-            const tmpPath = `${tmpDir}/tmp_gap_image_${Date.now()}.png`
-            await window.electronAPI.saveFile(tmpPath, b64, 'base64')
-            imagePath = tmpPath
-          }
-        }
-        await regenGenerate(finalPrompt, imagePath, settings)
+        await regenGenerate(finalPrompt, null, settings, null, imageConditionings)
       }
     } catch (err) {
       console.error('Gap generation failed:', err)
       setGeneratingGap(null)
     }
-  }, [selectedGap, gapGenerateMode, gapPrompt, gapSettings, gapImageFile, gapApplyAudioToTrack, currentProjectId, regenGenerate, regenGenerateImage])
+  }, [selectedGap, gapGenerateMode, gapPrompt, gapSettings, gapImageFile, gapApplyAudioToTrack, currentProjectId, regenGenerate, regenGenerateImage, projectId])
 
   // When generation completes, place the result in the gap
   useEffect(() => {
@@ -240,7 +249,8 @@ export function useGapGeneration({
         resolution: isImageResult ? gap.settings.imageResolution : gap.settings.videoResolution,
         duration: type === 'video' ? gapDuration : undefined,
         generationParams: {
-          mode: (isImageResult ? 'text-to-image' : (gap.imageFile ? 'image-to-video' : 'text-to-video')) as 'text-to-video' | 'image-to-video' | 'text-to-image',
+          mode: (isImageResult ? 'text-to-image' : (gap.imageConditionings.length ? 'image-to-video' : 'text-to-video')) as 'text-to-video' | 'image-to-video' | 'text-to-image',
+          imageConditionings: gap.imageConditionings,
           prompt: gap.prompt,
           model: gap.settings.model,
           duration: Math.min(Math.max(1, Math.round(gapDuration)), gap.settings.model === 'pro' ? 10 : 20),

@@ -1,159 +1,192 @@
-"""Routes for managed ComfyUI in web/self-hosted deployments."""
-
+"""ComfyUI lifecycle, published workflows and same-origin editor transport."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-from urllib.parse import urlencode
+import asyncio
+import base64
+import hmac
+import json
+from typing import cast
 from urllib.error import HTTPError as UrlHTTPError
-from urllib.request import Request as UrlRequest
-from urllib.request import urlopen
+from urllib.request import Request as UrlRequest, urlopen
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from starlette.responses import Response
+from websockets.asyncio.client import connect
 
 from _routes._errors import HTTPError
-
-if TYPE_CHECKING:
-    from services.comfyui_service import ComfyUIService
+from api_types import ComfyRunPayload, ComfyRunRequest, ComfyWorkflowPayload, ComfyWorkflowRequest
+from app_handler import AppHandler
+from state import get_state_service
 
 router = APIRouter(tags=["comfyui"])
 
-_service: "ComfyUIService | None" = None
 
-
-def init_comfyui_service(service: "ComfyUIService | None") -> None:
-    global _service
-    _service = service
-
-
-def _require_service() -> "ComfyUIService":
-    if _service is None:
-        raise HTTPError(503, "ComfyUI is not configured for this server.")
-    return _service
-
-
-def _public_status_payload(request: Request) -> dict[str, object]:
-    status = _require_service().status()
-    public_url = str(request.base_url).rstrip("/") + "/comfyui-server/"
-    return status.to_payload(public_url=public_url)
+def _public_status(request: Request, response: Response, handler: AppHandler) -> dict[str, object]:
+    session = cast(str, request.app.state.comfy_session)
+    if session:
+        response.set_cookie("ltx_comfy_session", session, httponly=True, samesite="lax",
+                            secure=request.url.scheme == "https", path="/comfyui-server/", max_age=28800)
+    return handler.comfy_workflows.require_runtime().status().to_payload(
+        public_url=str(request.base_url).rstrip("/") + "/comfyui-server/",
+    )
 
 
 @router.get("/api/comfyui/status")
-def route_comfyui_status(request: Request) -> dict[str, object]:
-    return _public_status_payload(request)
+def route_status(request: Request, response: Response, handler: AppHandler = Depends(get_state_service)) -> dict[str, object]:
+    return _public_status(request, response, handler)
 
 
 @router.post("/api/comfyui/start")
-async def route_start_comfyui(request: Request) -> dict[str, object]:
-    service = _require_service()
-    await service.start()
-    return _public_status_payload(request)
+async def route_start(request: Request, response: Response, handler: AppHandler = Depends(get_state_service)) -> dict[str, object]:
+    await handler.comfy_workflows.require_runtime().start()
+    return _public_status(request, response, handler)
+
+
+@router.get("/api/comfyui/workflows")
+def route_workflows(handler: AppHandler = Depends(get_state_service)) -> list[ComfyWorkflowPayload]:
+    return handler.comfy_workflows.list_workflows()
+
+
+@router.post("/api/comfyui/stop")
+async def route_stop(handler: AppHandler = Depends(get_state_service)) -> dict[str, object]:
+    runtime = handler.comfy_workflows.require_runtime()
+    await handler.comfy_workflows.stop()
+    return runtime.status().to_payload()
+
+
+@router.post("/api/comfyui/workflows")
+def route_save(payload: ComfyWorkflowRequest, handler: AppHandler = Depends(get_state_service)) -> ComfyWorkflowPayload:
+    return handler.comfy_workflows.save(payload)
+
+
+@router.put("/api/comfyui/workflows/{workflow_id}")
+def route_update(workflow_id: str, payload: ComfyWorkflowRequest, handler: AppHandler = Depends(get_state_service)) -> ComfyWorkflowPayload:
+    return handler.comfy_workflows.save(payload, workflow_id)
+
+
+@router.post("/api/comfyui/workflows/{workflow_id}/run")
+async def route_run(workflow_id: str, payload: ComfyRunRequest, handler: AppHandler = Depends(get_state_service)) -> ComfyRunPayload:
+    return await handler.comfy_workflows.run(workflow_id, payload)
+
+
+@router.get("/api/comfyui/runs/{run_id}")
+async def route_run_status(run_id: str, handler: AppHandler = Depends(get_state_service)) -> ComfyRunPayload:
+    return await handler.comfy_workflows.get_run(run_id)
+
+
+@router.post("/api/comfyui/runs/{run_id}/cancel")
+async def route_cancel(run_id: str, handler: AppHandler = Depends(get_state_service)) -> ComfyRunPayload:
+    return await handler.comfy_workflows.cancel(run_id)
 
 
 @router.api_route("/comfyui-server/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-async def route_comfyui_proxy(path: str, request: Request) -> Response:
-    status = _require_service().status()
+async def route_proxy(path: str, request: Request, handler: AppHandler = Depends(get_state_service)) -> Response:
+    runtime = handler.comfy_workflows.require_runtime()
+    status = runtime.status()
     if status.state != "running" or not status.url:
-        await _require_service().start()
-        status = _require_service().status()
-    if not status.url:
-        raise HTTPError(503, status.error or "ComfyUI is not running.")
-
-    query = request.url.query
+        raise HTTPError(503, status.error or "Start ComfyUI before opening the editor.")
     target = f"{status.url}/{path}"
-    if query:
-        target = f"{target}?{query}"
-
+    if request.url.query:
+        target += f"?{request.url.query}"
     body = await request.body()
-    headers = {
-        key: value
-        for key, value in request.headers.items()
-        if key.lower() not in {"host", "content-length", "connection", "accept-encoding"}
-    }
+    if request.method == "POST" and path.rstrip("/") in {"prompt", "api/prompt"}:
+        try:
+            payload = TypeAdapter(dict[str, JsonValue]).validate_json(body)
+        except ValidationError as exc:
+            raise HTTPError(422, "The workflow request must be a JSON object.") from exc
+        result = await handler.comfy_workflows.queue_editor(payload)
+        return Response(content=json.dumps(result), media_type="application/json")
+    headers = {key: value for key, value in request.headers.items()
+               if not key.lower().startswith("sec-fetch-") and
+               key.lower() not in {"host", "content-length", "connection", "accept-encoding", "authorization", "cookie", "origin"}}
+    return await asyncio.to_thread(_proxy_http_request, request.method, target, headers, body, path)
 
-    import asyncio
 
-    return await asyncio.to_thread(_proxy_http_request, request.method, target, headers, body)
+def _ws_authenticated(websocket: WebSocket) -> bool:
+    token = cast(str, websocket.app.state.auth_token)
+    if not token:
+        return True
+    session = cast(str, websocket.app.state.comfy_session)
+    if hmac.compare_digest(websocket.cookies.get("ltx_comfy_session", ""), session):
+        return True
+    header = websocket.headers.get("authorization", "")
+    if header.startswith("Bearer "):
+        return hmac.compare_digest(header[7:], token)
+    if header.startswith("Basic "):
+        try:
+            password = base64.b64decode(header[6:]).decode().partition(":")[2]
+            return hmac.compare_digest(password, token)
+        except (ValueError, UnicodeError):
+            return False
+    return False
 
 
 @router.websocket("/comfyui-server/ws")
-async def route_comfyui_ws(websocket: WebSocket) -> None:
-    status = _require_service().status()
+async def route_ws(websocket: WebSocket) -> None:
+    if not _ws_authenticated(websocket):
+        await websocket.close(code=1008)
+        return
+    handler = cast(AppHandler, websocket.app.state.handler)
+    status = handler.comfy_workflows.require_runtime().status()
     if status.state != "running" or not status.url:
-        await _require_service().start()
-        status = _require_service().status()
-    if not status.url:
         await websocket.close(code=1011)
         return
-
+    target = status.url.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
+    if websocket.url.query:
+        target += "?" + websocket.url.query
     await websocket.accept()
-    ws_url = status.url.replace("http://", "ws://").replace("https://", "wss://")
-    query = urlencode(dict(websocket.query_params))
-    target = f"{ws_url}/ws"
-    if query:
-        target = f"{target}?{query}"
-
+    tasks: set[asyncio.Task[None]] = set()
     try:
-        import websockets  # type: ignore[reportMissingImports]
-
-        async with websockets.connect(target) as upstream:  # type: ignore[reportUnknownMemberType]
-            import asyncio
-
-            async def client_to_upstream() -> None:
+        async with connect(target, max_size=None) as upstream:
+            async def send_upstream() -> None:
                 while True:
                     message = await websocket.receive()
-                    if "text" in message:
+                    if message["type"] == "websocket.disconnect":
+                        return
+                    if message.get("text") is not None:
                         await upstream.send(message["text"])
-                    elif "bytes" in message:
+                    elif message.get("bytes") is not None:
                         await upstream.send(message["bytes"])
 
-            async def upstream_to_client() -> None:
+            async def send_client() -> None:
                 async for message in upstream:
                     if isinstance(message, bytes):
                         await websocket.send_bytes(message)
                     else:
                         await websocket.send_text(message)
 
-            done, pending = await asyncio.wait(
-                {asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
+            tasks = {asyncio.create_task(send_upstream()), asyncio.create_task(send_client())}
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()
     except WebSocketDisconnect:
-        return
-    except Exception:
-        await websocket.close(code=1011)
+        pass
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def _proxy_http_request(method: str, target: str, headers: dict[str, str], body: bytes) -> Response:
+def _proxy_http_request(method: str, target: str, headers: dict[str, str], body: bytes, path: str = "") -> Response:
     request = UrlRequest(target, data=body if body else None, headers=headers, method=method)
     try:
-        with urlopen(request, timeout=120) as upstream:
-            response_headers = {
-                key: value
-                for key, value in upstream.headers.items()
-                if key.lower() not in {"content-encoding", "transfer-encoding", "connection"}
-            }
-            return Response(
-                content=upstream.read(),
-                status_code=upstream.status,
-                headers=response_headers,
-                media_type=upstream.headers.get_content_type(),
-            )
+        upstream = urlopen(request, timeout=120)
     except UrlHTTPError as exc:
-        response_headers = {
-            key: value
-            for key, value in exc.headers.items()
-            if key.lower() not in {"content-encoding", "transfer-encoding", "connection"}
-        }
-        return Response(
-            content=exc.read(),
-            status_code=exc.code,
-            headers=response_headers,
-            media_type=exc.headers.get_content_type(),
-        )
+        upstream = exc
     except Exception as exc:
         raise HTTPError(502, f"ComfyUI proxy request failed: {exc}") from exc
+    with upstream:
+        data = upstream.read()
+        content_type = upstream.headers.get_content_type()
+        if content_type == "text/html":
+            text = data.decode("utf-8")
+            for attr in ("src", "href"):
+                text = text.replace(f'{attr}="/', f'{attr}="/comfyui-server/')
+            data = text.encode("utf-8")
+        response_headers = {key: value for key, value in upstream.headers.items()
+                            if key.lower() not in {"content-length", "content-encoding", "transfer-encoding", "connection", "set-cookie"}}
+        code = upstream.getcode()
+        if not isinstance(code, int):
+            raise HTTPError(502, "ComfyUI returned an invalid HTTP status.")
+        return Response(content=data, status_code=code, headers=response_headers, media_type=content_type)

@@ -122,26 +122,25 @@ class RetakeHandler(StateHandlerBase):
         prompt: str,
         mode: str,
     ) -> RetakeResponse:
-        if self._generation.is_generation_running():
-            raise HTTPError(409, "Generation already in progress")
-
         end_time = start_time + duration
         if start_time >= end_time:
             raise HTTPError(400, "start_time must be less than end_time")
 
         self._validate_video_metadata(str(video_file))
 
-        try:
-            self._text.prepare_text_encoding(prompt, enhance_prompt=False)
-        except RuntimeError as exc:
-            raise HTTPError(400, str(exc)) from exc
-
         generation_id = uuid.uuid4().hex[:8]
+        if not self._generation.try_reserve_generation(generation_id):
+            raise HTTPError(409, "Generation already in progress")
+
         seed = self._resolve_seed()
         output_path = self.config.outputs_dir / f"retake_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{generation_id}.mp4"
         regenerate_video, regenerate_audio = self._resolve_retake_mode(mode)
 
         try:
+            try:
+                self._text.prepare_text_encoding(prompt, enhance_prompt=False)
+            except RuntimeError as exc:
+                raise HTTPError(400, str(exc)) from exc
             pipeline_state = self._pipelines.load_retake_pipeline(distilled=True)
             self._generation.start_generation(generation_id)
             self._generation.update_progress("loading_model", 5, 0, 1)
@@ -181,6 +180,7 @@ class RetakeHandler(StateHandlerBase):
             raise HTTPError(500, f"Generation error: {exc}") from exc
         finally:
             self._text.clear_api_embeddings()
+            self._generation.release_generation(generation_id)
 
     @staticmethod
     def _resolve_retake_mode(mode: str) -> tuple[bool, bool]:

@@ -23,7 +23,13 @@ from typing import Any, Final, cast
 import torch
 
 from api_types import ImageConditioningInput
-from services.ltx_pipeline_common import default_tiling_config, encode_video_output, video_chunks_number
+from services.ltx_pipeline_common import (
+    default_tiling_config,
+    encode_video_output,
+    get_quantization_policy_class,
+    guiding_image_conditionings,
+    video_chunks_number,
+)
 from services.services_utils import AudioOrNone, device_supports_fp8
 
 StepCallback = Callable[[int, int], None]  # (current_step, total_steps)
@@ -101,9 +107,9 @@ class LTXProVideoPipeline:
         device: torch.device,
     ) -> None:
         from ltx_core.loader import LTXV_LORA_COMFY_RENAMING_MAP, LoraPathStrengthAndSDOps
-        from ltx_core.quantization import QuantizationPolicy
         from ltx_pipelines.utils.constants import detect_params
 
+        QuantizationPolicy = get_quantization_policy_class()
         self.use_upscaler = use_upscaler
 
         params = detect_params(checkpoint_path)
@@ -160,20 +166,21 @@ class LTXProVideoPipeline:
     ) -> tuple[torch.Tensor | Iterator[torch.Tensor], AudioOrNone, int]:
         assert self._two_stage is not None
         tiling_config = default_tiling_config()
-        video, audio = self._two_stage(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            seed=seed,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            frame_rate=frame_rate,
-            num_inference_steps=num_inference_steps,
-            video_guider_params=self._video_guider_params,
-            audio_guider_params=self._audio_guider_params,
-            images=self._to_ltx_images(images),
-            tiling_config=tiling_config,
-        )
+        with guiding_image_conditionings(images, ("ltx_pipelines.ti2vid_two_stages",)):
+            video, audio = self._two_stage(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                seed=seed,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                frame_rate=frame_rate,
+                num_inference_steps=num_inference_steps,
+                video_guider_params=self._video_guider_params,
+                audio_guider_params=self._audio_guider_params,
+                images=self._to_ltx_images(images),
+                tiling_config=tiling_config,
+            )
         return video, audio, video_chunks_number(num_frames, tiling_config)
 
     def _run_one_stage(
@@ -189,19 +196,20 @@ class LTXProVideoPipeline:
         images: list[ImageConditioningInput],
     ) -> tuple[torch.Tensor | Iterator[torch.Tensor], AudioOrNone, int]:
         assert self._one_stage is not None
-        video, audio = self._one_stage(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            seed=seed,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            frame_rate=frame_rate,
-            num_inference_steps=num_inference_steps,
-            video_guider_params=self._video_guider_params,
-            audio_guider_params=self._audio_guider_params,
-            images=self._to_ltx_images(images),
-        )
+        with guiding_image_conditionings(images, ("ltx_pipelines.ti2vid_one_stage",)):
+            video, audio = self._one_stage(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                seed=seed,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                frame_rate=frame_rate,
+                num_inference_steps=num_inference_steps,
+                video_guider_params=self._video_guider_params,
+                audio_guider_params=self._audio_guider_params,
+                images=self._to_ltx_images(images),
+            )
         return video, audio, 1
 
     def _total_steps(self, num_inference_steps: int) -> int:
